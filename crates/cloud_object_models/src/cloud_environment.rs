@@ -1,6 +1,12 @@
 use std::fmt;
 
+use cloud_objects::{
+    cloud_object::{GenericCloudObject, GenericServerObject, GenericStringModel, JsonObjectType},
+    ids::GenericStringObjectId,
+};
 use serde::{Deserialize, Serialize};
+
+use crate::{JsonModel, JsonSerializer};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct GithubRepo {
@@ -41,8 +47,6 @@ pub struct GcpProviderConfig {
     pub project_number: String,
     pub workload_identity_federation_pool_id: String,
     pub workload_identity_federation_provider_id: String,
-    /// Service account email for impersonation. When set, the federated token
-    /// is exchanged for a service account access token.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub service_account_email: Option<String>,
 }
@@ -66,7 +70,7 @@ impl ProvidersConfig {
     }
 }
 
-/// An AmbientAgentEnvironment represents an environment that we would run a Warp agent in.
+/// An ambient agent environment describes where a Warp agent runs.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct AmbientAgentEnvironment {
     /// Environment name
@@ -84,7 +88,6 @@ pub struct AmbientAgentEnvironment {
     /// List of setup commands to run after cloning
     #[serde(default)]
     pub setup_commands: Vec<String>,
-    /// Optional cloud provider configurations for automatic auth.
     #[serde(default, skip_serializing_if = "ProvidersConfig::is_empty")]
     pub providers: ProvidersConfig,
 }
@@ -107,3 +110,16 @@ impl AmbientAgentEnvironment {
         }
     }
 }
+
+impl JsonModel for AmbientAgentEnvironment {
+    fn json_object_type() -> JsonObjectType {
+        JsonObjectType::CloudEnvironment
+    }
+}
+
+pub type CloudAmbientAgentEnvironment =
+    GenericCloudObject<GenericStringObjectId, CloudAmbientAgentEnvironmentModel>;
+pub type CloudAmbientAgentEnvironmentModel =
+    GenericStringModel<AmbientAgentEnvironment, JsonSerializer>;
+pub type ServerAmbientAgentEnvironment =
+    GenericServerObject<GenericStringObjectId, CloudAmbientAgentEnvironmentModel>;
