@@ -1,14 +1,18 @@
+use std::collections::HashSet;
+use std::future::Future;
+use std::sync::mpsc::SyncSender;
+use std::sync::Arc;
+use std::time::Duration;
+
 use chrono::{DateTime, Utc};
+#[cfg(test)]
+pub use cloud_object_client::GetCloudObjectResponse;
+pub use cloud_object_client::InitialLoadResponse;
 use futures::channel::oneshot::{self, Receiver};
 use futures::stream::AbortHandle;
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use regex::Regex;
-use std::collections::{HashMap, HashSet};
-use std::future::Future;
-use std::sync::mpsc::SyncSender;
-use std::sync::Arc;
-use std::time::Duration;
 use warp_core::features::FeatureFlag;
 use warp_core::report_error;
 use warp_graphql::mcp_gallery_template::MCPGalleryTemplate;
@@ -51,9 +55,9 @@ use crate::cloud_object::{
     ObjectDeleteResult, ObjectIdType, ObjectMetadataUpdateResult, ObjectPermissionsUpdateData,
     ObjectType, Owner, Revision, RevisionAndLastEditor, ServerAIExecutionProfile, ServerAIFact,
     ServerAmbientAgentEnvironment, ServerCloudAgentConfig, ServerCloudObject,
-    ServerEnvVarCollection, ServerFolder, ServerMCPServer, ServerMetadata, ServerNotebook,
-    ServerObject, ServerPermissions, ServerPreference, ServerScheduledAmbientAgent,
-    ServerTemplatableMCPServer, ServerWorkflow, ServerWorkflowEnum, Space, UpdateCloudObjectResult,
+    ServerEnvVarCollection, ServerMCPServer, ServerMetadata, ServerPermissions, ServerPreference,
+    ServerScheduledAmbientAgent, ServerTemplatableMCPServer, ServerWorkflowEnum, Space,
+    UpdateCloudObjectResult,
 };
 use crate::drive::folders::{CloudFolderModel, FolderId};
 use crate::drive::sharing::SharingAccessLevel;
@@ -160,27 +164,6 @@ pub enum FetchSingleObjectOption {
 pub enum InitiatedBy {
     User,
     System,
-}
-#[derive(Default)]
-pub struct InitialLoadResponse {
-    pub updated_notebooks: Vec<ServerNotebook>,
-    pub deleted_notebooks: Vec<NotebookId>,
-    pub updated_workflows: Vec<ServerWorkflow>,
-    pub deleted_workflows: Vec<WorkflowId>,
-    pub updated_folders: Vec<ServerFolder>,
-    pub deleted_folders: Vec<FolderId>,
-    pub updated_generic_string_objects:
-        HashMap<GenericStringObjectFormat, Vec<Box<dyn ServerObject>>>,
-    pub deleted_generic_string_objects: Vec<GenericStringObjectId>,
-    pub user_profiles: Vec<UserProfileWithUID>,
-    pub action_histories: Vec<ObjectActionHistory>,
-    pub mcp_gallery: Vec<MCPGalleryTemplate>,
-}
-
-pub struct GetCloudObjectResponse {
-    pub object: ServerCloudObject,
-    pub descendants: Vec<ServerCloudObject>,
-    pub action_histories: Vec<ObjectActionHistory>,
 }
 
 #[derive(Debug)]

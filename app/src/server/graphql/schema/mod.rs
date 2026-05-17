@@ -1,4 +1,5 @@
 pub mod util;
+pub use util::{action_type_to_gql_action_type, object_action_history_from_gql};
 
 use anyhow::{bail, Result};
 use warp_graphql::generic_string_object::GenericStringObjectFormat;
@@ -41,7 +42,7 @@ pub fn update_generic_string_object_result_to_update_result(
                     })
                 }
                 GenericStringObjectUpdate::GenericStringObjectUpdateRejected(rejected) => {
-                    let format = rejected.conflicting_generic_string_object.format.clone();
+                    let format = rejected.conflicting_generic_string_object.format;
                     let boxed: Box<dyn ServerObject> = match format {
                         GenericStringObjectFormat::JsonEnvVarCollection => {
                             boxed_rejected_generic_string_object::<ServerEnvVarCollection>(
