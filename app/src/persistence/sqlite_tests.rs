@@ -2,7 +2,7 @@ use std::{path::PathBuf, sync::Arc};
 
 use ai::workspace::WorkspaceMetadata;
 use chrono::Utc;
-use diesel::connection::SimpleConnection;
+use cloud_object_persistence::to_cloud_object_permissions;
 use pathfinder_geometry::{rect::RectF, vector::Vector2F};
 use warp_core::features::FeatureFlag;
 use warp_graphql::scalars::time::ServerTimestamp;
@@ -544,7 +544,7 @@ fn test_deserialize_corrupted_guests() {
     };
 
     // The overall permissions should successfully convert, minus the object guests.
-    let cloud_permissions = super::to_cloud_object_permissions(&db_permissions, None);
+    let cloud_permissions = to_cloud_object_permissions(&db_permissions, None);
     assert_eq!(
         cloud_permissions,
         Some(CloudObjectPermissions {
