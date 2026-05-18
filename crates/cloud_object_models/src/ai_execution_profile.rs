@@ -19,6 +19,9 @@ pub enum ActionPermission {
     AgentDecides,
     AlwaysAllow,
     AlwaysAsk,
+    // This is intended to catch deserialization errors whenever we add new variants to this enum. Say we
+    // want to add a "Never" variant. Without this catch-all, old clients wouldn't be able to deserialize
+    // a "Never" into one of the existing options.
     #[serde(other)]
     Unknown,
 }
@@ -49,11 +52,13 @@ impl ActionPermission {
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum WriteToPtyPermission {
+    // This is for backwards compatibility with the old "Never" value.
     #[serde(alias = "Never")]
     AlwaysAllow,
     #[default]
     AlwaysAsk,
     AskOnFirstWrite,
+    // This is intended to catch deserialization errors whenever we add new variants to this enum.
     #[serde(other)]
     Unknown,
 }
@@ -83,6 +88,7 @@ pub enum ComputerUsePermission {
     Never,
     AlwaysAsk,
     AlwaysAllow,
+    // This is intended to catch deserialization errors whenever we add new variants to this enum.
     #[serde(other)]
     Unknown,
 }
@@ -430,6 +436,8 @@ impl AIExecutionProfile {
         }
     }
 
+    /// This creates a CLI-specific profile that will never ask the user for permission,
+    /// since we cannot do so in a non-interactive setting.
     pub fn create_default_cli_profile(
         is_sandboxed: bool,
         computer_use_override: Option<bool>,
