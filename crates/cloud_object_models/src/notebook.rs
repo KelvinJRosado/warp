@@ -5,6 +5,8 @@ use cloud_objects::{
 };
 use serde::{Deserialize, Serialize};
 
+#[cfg(not(target_family = "wasm"))]
+pub mod persistence;
 /// Serialized representation of a notebook for sync queue
 /// The AIDocumentID and ConversationID are stored here to avoid polluting the
 /// generic CreateObjectRequest type.
