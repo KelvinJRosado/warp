@@ -919,7 +919,7 @@ fn cloud_mode_v1_agent_prefixed_query_spawns_cloud_agent() {
             let request = ambient_model
                 .request()
                 .expect("enter should submit through the cloud agent spawn path");
-            assert_eq!(request.prompt, "/agent fix the tests");
+            assert_eq!(request.prompt.as_deref(), Some("/agent fix the tests"));
             assert_eq!(request.mode, UserQueryMode::Normal);
             assert!(input.as_ref(ctx).buffer_text(ctx).is_empty());
         });
@@ -964,7 +964,7 @@ fn cloud_mode_v2_agent_prefixed_query_spawns_cloud_agent() {
             let request = ambient_model
                 .request()
                 .expect("enter should submit through the cloud agent spawn path");
-            assert_eq!(request.prompt, "/agent fix the tests");
+            assert_eq!(request.prompt.as_deref(), Some("/agent fix the tests"));
             assert_eq!(request.mode, UserQueryMode::Normal);
             assert!(input.as_ref(ctx).buffer_text(ctx).is_empty());
         });
@@ -1319,7 +1319,7 @@ fn cloud_mode_dispatched_agent_inserts_queued_user_query() {
                 .update(ctx, |model, ctx| {
                     model.spawn_agent_with_request(
                         SpawnAgentRequest {
-                            prompt: "write the tests".to_string(),
+                            prompt: Some("write the tests".to_string()),
                             mode: UserQueryMode::Normal,
                             config: None,
                             title: None,

@@ -629,7 +629,7 @@ impl AmbientAgentViewModel {
         let config = Some(self.build_default_spawn_config(ctx));
         let (prompt, mode) = extract_user_query_mode(prompt);
         SpawnAgentRequest {
-            prompt,
+            prompt: Some(prompt),
             mode,
             config,
             title: self.pending_handoff.as_ref().and_then(|h| h.title.clone()),
@@ -1117,7 +1117,7 @@ impl AmbientAgentViewModel {
 
         let (prompt, mode) = extract_user_query_mode(prompt);
         let request = SpawnAgentRequest {
-            prompt,
+            prompt: Some(prompt),
             mode,
             config,
             title: None,
