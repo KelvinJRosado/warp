@@ -26,7 +26,7 @@ use crate::{
     editor::InteractionState,
     features::FeatureFlag,
     notebooks::editor::rich_text_styles,
-    settings::{AppEditorSettings, FontSettings},
+    settings::{AppEditorSettings, CodeEditorLineNumberMode, FontSettings},
     view_components::find::FindDirection,
 };
 use ai::diff_validation::DiffDelta;
@@ -2432,6 +2432,29 @@ impl CodeEditorView {
             input: input.to_string(),
         };
         self.handle_goto_line_event(&event, ctx);
+    }
+
+    pub fn displayed_line_number_for_test(
+        &self,
+        one_based_line_number: usize,
+        ctx: &AppContext,
+    ) -> Option<usize> {
+        let line_number_config = self.line_number_config(ctx)?;
+        let line_count = LineCount::from(one_based_line_number.checked_sub(1)?);
+
+        if line_number_config.mode == CodeEditorLineNumberMode::Relative {
+            if let Some(active_line_number) = line_number_config.active_line_number {
+                if active_line_number != line_count {
+                    return Some(
+                        active_line_number
+                            .as_usize()
+                            .abs_diff(line_count.as_usize()),
+                    );
+                }
+            }
+        }
+
+        Some(line_count.as_usize() + line_number_config.starting_line_number.unwrap_or(1))
     }
 }
 
