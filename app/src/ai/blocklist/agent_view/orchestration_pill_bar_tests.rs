@@ -66,16 +66,8 @@ fn pill_done_recency_key_puts_most_recent_first_and_unknown_last() {
 
 #[test]
 fn sort_pills_bubbles_attention_in_progress_keeps_spawn_done_uses_recency() {
-    const DONE_STATUS_KEY: u8 = 3;
     let blocked = ConversationStatus::Blocked {
         blocked_action: String::new(),
-    };
-    let secondary_for = |status: &ConversationStatus, ms: Option<i64>| -> i64 {
-        if pill_status_sort_key(Some(status)) == DONE_STATUS_KEY {
-            pill_done_recency_key(ms)
-        } else {
-            0
-        }
     };
     // (status, finish time) per spawn index.
     let inputs: Vec<(ConversationStatus, Option<i64>)> = vec![
@@ -91,11 +83,8 @@ fn sort_pills_bubbles_attention_in_progress_keeps_spawn_done_uses_recency() {
         .iter()
         .enumerate()
         .map(|(idx, (status, ms))| {
-            (
-                pill_status_sort_key(Some(status)),
-                secondary_for(status, *ms),
-                idx,
-            )
+            let status_key = pill_status_sort_key(Some(status));
+            (status_key, pill_secondary_sort_key(status_key, *ms), idx)
         })
         .collect();
     sortable.sort_by_key(|(k, s, idx)| (*k, *s, *idx));
@@ -116,9 +105,8 @@ fn sort_pills_is_stable_within_in_progress_bucket() {
 #[test]
 fn sort_pills_done_bucket_orders_by_recency_regardless_of_completion_type() {
     // Old Cancelled sinks behind a fresh Success.
-    const DONE_STATUS_KEY: u8 = 3;
-    let cancelled_old = pill_done_recency_key(Some(100));
-    let success_new = pill_done_recency_key(Some(500));
+    let cancelled_old = pill_secondary_sort_key(DONE_STATUS_KEY, Some(100));
+    let success_new = pill_secondary_sort_key(DONE_STATUS_KEY, Some(500));
     let mut entries: Vec<(u8, i64, usize)> = vec![
         (DONE_STATUS_KEY, cancelled_old, 0),
         (DONE_STATUS_KEY, success_new, 1),
