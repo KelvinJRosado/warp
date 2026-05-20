@@ -23,7 +23,6 @@ use crate::{
 use warpui::SingletonEntity;
 
 use super::{ActionExecution, AnyActionExecution, ExecuteActionInput, PreprocessActionInput};
-#[cfg(not(target_family = "wasm"))]
 fn format_upload_artifact_error(err: &anyhow::Error) -> String {
     let root_cause = err
         .chain()
