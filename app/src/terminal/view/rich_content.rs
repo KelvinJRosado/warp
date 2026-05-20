@@ -3,7 +3,10 @@ use warpui::{prelude::ChildView, Element, EntityId, View, ViewContext, ViewHandl
 use crate::{
     ai::{
         agent::{conversation::AIConversationId, AIAgentExchangeId},
-        blocklist::{agent_view::AgentViewEntryOrigin, telemetry_banner::TelemetryBanner, AIBlock},
+        blocklist::{
+            agent_view::AgentViewEntryOrigin, block::PendingUserQueryBlock,
+            telemetry_banner::TelemetryBanner, AIBlock,
+        },
     },
     env_vars::env_var_collection_block::EnvVarCollectionBlock,
     terminal::{
@@ -155,6 +158,13 @@ impl RichContent {
         matches!(self.metadata, Some(RichContentMetadata::UsageFooter))
     }
 
+    pub fn is_pending_user_query(&self) -> bool {
+        matches!(
+            self.metadata,
+            Some(RichContentMetadata::PendingUserQuery { .. })
+        )
+    }
+
     pub fn is_telemetry_banner(&self) -> bool {
         matches!(
             self.metadata,
@@ -258,6 +268,9 @@ pub enum RichContentMetadata {
     },
     TelemetryBanner {
         telemetry_banner_handle: ViewHandle<TelemetryBanner>,
+    },
+    PendingUserQuery {
+        pending_user_query_block_handle: ViewHandle<PendingUserQueryBlock>,
     },
     AgentViewEntry(AgentViewEntryMetadata),
     AmbientAgentBlock {

@@ -453,7 +453,7 @@ impl QueuedPromptsPanelView {
     /// Visibility predicate used by the host to decide whether to render the panel.
     pub fn should_render(&self, ctx: &AppContext) -> bool {
         if !FeatureFlag::QueueSlashCommand.is_enabled()
-            || !FeatureFlag::PendingUserQueryIndicator.is_enabled()
+            || !FeatureFlag::NewQueuedPromptUI.is_enabled()
         {
             return false;
         }

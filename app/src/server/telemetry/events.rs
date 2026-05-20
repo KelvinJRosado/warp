@@ -5858,7 +5858,7 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             | Self::QueuedPromptDeleted
             | Self::QueuedPromptReordered
             | Self::QueuedPromptPanelCollapseToggled => {
-                EnablementState::Flag(FeatureFlag::QueueSlashCommand)
+                EnablementState::Flag(FeatureFlag::NewQueuedPromptUI)
             }
         }
     }

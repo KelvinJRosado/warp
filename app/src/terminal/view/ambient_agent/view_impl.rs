@@ -121,7 +121,11 @@ impl TerminalView {
             _ => false,
         };
         if should_remove_pending_user_query {
-            self.remove_cloud_mode_queued_query(ctx);
+            if FeatureFlag::NewQueuedPromptUI.is_enabled() {
+                self.remove_cloud_mode_queued_query(ctx);
+            } else {
+                self.remove_pending_user_query_block(ctx);
+            }
         }
 
         match event {
@@ -163,12 +167,18 @@ impl TerminalView {
                         .map(|request| display_user_query_with_mode(request.mode, &request.prompt))
                         .unwrap_or_default();
                     if !prompt.is_empty() {
-                        if let Some(id) =
-                            self.enqueue_prompt(prompt, QueuedQueryOrigin::InitialCloudMode, ctx)
-                        {
-                            ambient_agent_view_model.update(ctx, |model, _| {
-                                model.set_cloud_mode_queued_query_id(Some(id));
-                            });
+                        if FeatureFlag::NewQueuedPromptUI.is_enabled() {
+                            if let Some(id) = self.enqueue_prompt(
+                                prompt,
+                                QueuedQueryOrigin::InitialCloudMode,
+                                ctx,
+                            ) {
+                                ambient_agent_view_model.update(ctx, |model, _| {
+                                    model.set_cloud_mode_queued_query_id(Some(id));
+                                });
+                            }
+                        } else if FeatureFlag::PendingUserQueryIndicator.is_enabled() {
+                            self.insert_cloud_mode_queued_user_query_block(prompt, ctx);
                         }
                     }
                 } else {
@@ -202,12 +212,16 @@ impl TerminalView {
                     .pending_followup_prompt()
                     .map(str::to_owned);
                 if let Some(prompt) = pending_prompt {
-                    if let Some(id) =
-                        self.enqueue_prompt(prompt, QueuedQueryOrigin::InitialCloudMode, ctx)
-                    {
-                        ambient_agent_view_model.update(ctx, |model, _| {
-                            model.set_cloud_mode_queued_query_id(Some(id));
-                        });
+                    if FeatureFlag::NewQueuedPromptUI.is_enabled() {
+                        if let Some(id) =
+                            self.enqueue_prompt(prompt, QueuedQueryOrigin::InitialCloudMode, ctx)
+                        {
+                            ambient_agent_view_model.update(ctx, |model, _| {
+                                model.set_cloud_mode_queued_query_id(Some(id));
+                            });
+                        }
+                    } else if FeatureFlag::PendingUserQueryIndicator.is_enabled() {
+                        self.insert_cloud_mode_queued_user_query_block(prompt, ctx);
                     }
                 }
                 ctx.notify();

@@ -32,6 +32,7 @@ mod link_detection;
 mod open_in_warp;
 mod pane_impl;
 mod passive_suggestions;
+mod pending_user_query;
 #[cfg(not(target_family = "wasm"))]
 pub(crate) mod plugin_instructions_block;
 pub mod rich_content;
@@ -2457,6 +2458,10 @@ pub fn is_prompt_suggestions_enabled(app: &AppContext) -> bool {
 type TerminalViewCallback = Box<dyn FnOnce(&mut TerminalView, &mut ViewContext<TerminalView>)>;
 type ConversationFinishedCallback =
     Box<dyn FnOnce(&mut TerminalView, FinishReason, &mut ViewContext<TerminalView>)>;
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::terminal::view) enum PendingUserQueryKind {
+    CloudMode,
+}
 
 #[derive(Debug, Clone)]
 pub struct TerminalDropTargetData {
@@ -2669,6 +2674,8 @@ pub struct TerminalView {
     /// The child views that represent rich content. These can be inserted into the block list with
     /// the `insert_rich_content` helper function.
     rich_content_views: Vec<RichContent>,
+    pending_user_query_view_id: Option<EntityId>,
+    pending_user_query_kind: Option<PendingUserQueryKind>,
 
     /// Cached view ids for usage footers keyed by the AI block view id that owns them.
     usage_footer_view_ids: HashMap<EntityId, EntityId>,
@@ -4237,6 +4244,8 @@ impl TerminalView {
             block_filter_editor,
             active_filter_editor_block_index: None,
             rich_content_views: Vec::new(),
+            pending_user_query_view_id: None,
+            pending_user_query_kind: None,
             usage_footer_view_ids: Default::default(),
             block_onboarding_active: false,
             onboarding_agentic_suggestions_block: None,
@@ -4323,22 +4332,22 @@ impl TerminalView {
         };
         terminal_view.register_subscriptions_for_use_agent_footer(ctx);
 
-        // Construct the queued prompts panel and wire it into the input view so it renders
-        // between the warping indicator and the input editor.
-        let queued_query_model = terminal_view.queued_query_model.clone();
-        let queued_prompts_panel = ctx.add_typed_action_view(|ctx| {
-            crate::ai::blocklist::QueuedPromptsPanelView::new(
-                queued_query_model,
-                terminal_view.ai_context_model.clone(),
-                ctx,
-            )
-        });
-        ctx.subscribe_to_view(&queued_prompts_panel, |me, _, event, ctx| {
-            me.handle_queued_prompts_panel_event(event, ctx);
-        });
-        terminal_view.input.update(ctx, |input, _| {
-            input.set_queued_prompts_panel(queued_prompts_panel)
-        });
+        if FeatureFlag::NewQueuedPromptUI.is_enabled() {
+            let queued_query_model = terminal_view.queued_query_model.clone();
+            let queued_prompts_panel = ctx.add_typed_action_view(|ctx| {
+                crate::ai::blocklist::QueuedPromptsPanelView::new(
+                    queued_query_model,
+                    terminal_view.ai_context_model.clone(),
+                    ctx,
+                )
+            });
+            ctx.subscribe_to_view(&queued_prompts_panel, |me, _, event, ctx| {
+                me.handle_queued_prompts_panel_event(event, ctx);
+            });
+            terminal_view.input.update(ctx, |input, _| {
+                input.set_queued_prompts_panel(queued_prompts_panel)
+            });
+        }
 
         // Forward RemoteServerManager setup events into the terminal event stream
         // so the ModelEventDispatcher can gate session initialization on them.
@@ -5598,7 +5607,11 @@ impl TerminalView {
                         .set_is_executing_oz_environment_startup_commands(false);
                 }
 
-                self.remove_cloud_mode_queued_query_for_conversation(*conversation_id, ctx);
+                if FeatureFlag::NewQueuedPromptUI.is_enabled() {
+                    self.remove_cloud_mode_queued_query_for_conversation(*conversation_id, ctx);
+                } else {
+                    self.remove_pending_user_query_block(ctx);
+                }
 
                 let should_add_ai_block = history_model
                     .as_ref(ctx)

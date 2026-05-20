@@ -730,6 +730,8 @@ pub enum FeatureFlag {
     /// Gates the `/queue` slash command, which lets users queue a follow-up prompt
     /// while the agent is mid-response.
     QueueSlashCommand,
+    /// Enables the input-adjacent queued prompts panel for managing queued prompts.
+    NewQueuedPromptUI,
 
     /// Enables an agent tool for the CLI subagent to explicitly transfer command control to the
     /// user.

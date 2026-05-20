@@ -1,40 +1,40 @@
 # Queued Prompts UI — Technical Spec
 See `specs/REMOTE-1543/PRODUCT.md` for user-visible behavior. This document covers implementation only.
 ## Context
-The new queued prompts panel is more capable than the previous pending-prompt indicator, but it should not replace the old path for all users yet. The new panel must be behind a new feature flag, enabled in dogfood only. When that flag is off, Warp must keep using the previous pending queued prompt UI and lifecycle code, including Cloud Mode setup.
-The implementation should therefore be additive:
-- Keep the legacy pending-query code restored and wired exactly as the feature-off path.
-- Keep the new multi-row queue model and input-adjacent panel as the feature-on path.
-- Avoid rewriting the old UI/lifecycle code just to support the new path.
+The new queued prompts panel should be behind a new opt-in feature flag. General prompt queueing should continue to use the new multi-row queue model regardless of the flag; when the flag is off, those prompts may queue without rendering the new management panel. The only old queued-prompt UI behavior we need to preserve is Cloud Mode / cloud-agent setup, where the initial prompt should keep using the old pending user query block when the new UI flag is off.
+The implementation should therefore be additive and narrowly scoped:
+- Keep the restored legacy pending-query block for Cloud Mode setup when `NewQueuedPromptUI` is off.
+- Keep the new multi-row queue model as the source of truth for general queued prompts.
+- Keep the new input-adjacent panel as the opt-in rendering / management surface.
+- Avoid rewriting the old Cloud Mode pending-block code just to support the new path.
 ## Feature flag
 Add a new runtime feature flag:
 - Cargo feature: `new_queued_prompt_ui` in `app/Cargo.toml`.
 - Runtime flag: `FeatureFlag::NewQueuedPromptUI` in `crates/warp_features/src/lib.rs`.
 - App registration: `#[cfg(feature = "new_queued_prompt_ui")] FeatureFlag::NewQueuedPromptUI` in `app/src/lib.rs`.
-- Dogfood enablement: include `FeatureFlag::NewQueuedPromptUI` in `DOGFOOD_FLAGS`.
-Do not add `new_queued_prompt_ui` to the default Cargo feature list. Stable / non-dogfood users should see the old queued prompt UI until this feature is promoted.
+- Opt-in only: do not include `FeatureFlag::NewQueuedPromptUI` in `DOGFOOD_FLAGS`, `PREVIEW_FLAGS`, or `RELEASE_FLAGS`.
+Do not add `new_queued_prompt_ui` to the default Cargo feature list. Users should not see the new queued prompts panel unless they explicitly opt into this feature, but general prompt queueing should continue to use the new queue model.
 ## Rollout behavior
 The rollout matrix is:
 - `QueueSlashCommand` off: queue trigger surfaces that depend on `/queue` remain disabled as they do today.
-- `QueueSlashCommand` on and `NewQueuedPromptUI` off: use the legacy pending queued prompt UI and single-slot callback behavior.
-- `QueueSlashCommand` on and `NewQueuedPromptUI` on: use the new multi-row queue model and `QueuedPromptsPanelView`.
-`PendingUserQueryIndicator` remains the gate for whether the legacy pending prompt indicator renders. `NewQueuedPromptUI` is the gate for replacing that legacy indicator with the new panel.
-## Legacy feature-off path
-Restore the old code as-is where possible:
+- `QueueSlashCommand` on and `NewQueuedPromptUI` off: general queued prompts use `QueuedQueryModel`, but the new panel is not constructed/rendered. Cloud Mode setup uses the legacy pending user query block.
+- `QueueSlashCommand` on and `NewQueuedPromptUI` on: general queued prompts and Cloud Mode setup use `QueuedQueryModel`, and `QueuedPromptsPanelView` renders queued rows.
+`PendingUserQueryIndicator` remains relevant only to the restored legacy Cloud Mode pending block. `NewQueuedPromptUI` is the rollout switch for the new input-adjacent queue panel.
+## Legacy Cloud Mode feature-off path
+Restore the old code as-is where possible, but use it only for Cloud Mode / cloud-agent setup when `NewQueuedPromptUI` is off:
 - `app/src/ai/blocklist/block/pending_user_query_block.rs`
 - `app/src/terminal/view/pending_user_query.rs`
 - `RichContentMetadata::PendingUserQuery` and `RichContent::is_pending_user_query` in `app/src/terminal/view/rich_content.rs`
-- `PendingUserQueryKind`, `pending_user_query_view_id`, `pending_user_query_kind`, and `queued_prompt_callback` in `app/src/terminal/view.rs`
+- `PendingUserQueryKind`, `pending_user_query_view_id`, and `pending_user_query_kind` in `app/src/terminal/view.rs`
 - selected-text plumbing for `PendingUserQueryBlock` in `app/src/terminal/model/blocks/selection.rs` and `TerminalView::pending_user_query_selected_text`
-The legacy path should continue using `TerminalView::send_user_query_after_next_conversation_finished` for user-managed queued prompts. It should not be reimplemented on top of `QueuedQueryModel` when `NewQueuedPromptUI` is off.
-Legacy behavior:
-- `/queue <prompt>` while an agent response is in progress shows the old pending user query block when `PendingUserQueryIndicator` is enabled.
-- `/compact-and <prompt>` and `/fork-and-compact <prompt>` show the old pending user query block while the summarization/fork summarization is running.
-- The old block supports the existing dismiss and send-now affordances according to the old call-site options.
-- On successful completion, the old callback removes the block and submits the queued prompt through `Input::submit_queued_prompt`.
-- On error/cancel, the old callback removes the block and restores the prompt into the input when the input is empty.
+Do not restore the legacy single-slot queued prompt callback as the general prompt queueing implementation. General queued prompts should continue to append to `QueuedQueryModel`; with `NewQueuedPromptUI` off, they simply do not render in the new panel.
+Legacy Cloud Mode behavior:
+- Cloud Mode initial prompt setup shows the old pending user query block when `NewQueuedPromptUI` is off and `PendingUserQueryIndicator` is enabled.
+- The old Cloud Mode block has no dismiss or send-now affordances; the cloud run lifecycle owns removal.
+- When the real shared-session transcript content, auth, cancellation, or non-setup-v2 failure path takes over, the old block is removed by the restored legacy removal helper.
+- For `CloudModeSetupV2` failures, keep the old block visible above the failure/tombstone state so the user can still see the prompt that was submitted.
 ## New feature-on path
-When `FeatureFlag::NewQueuedPromptUI.is_enabled()` is true, use the new multi-row queue implementation:
+General queued prompts always use the new multi-row queue implementation. When `FeatureFlag::NewQueuedPromptUI.is_enabled()` is true, also render/manage that queue with the new panel:
 - `QueuedQueryModel` in `app/src/ai/blocklist/queued_query.rs`
 - `QueuedPromptsPanelView` in `app/src/ai/blocklist/queued_prompts_panel.rs`
 - `Input::queued_prompts_panel` in `app/src/terminal/input.rs`
@@ -45,52 +45,39 @@ When `FeatureFlag::NewQueuedPromptUI.is_enabled()` is true, use the new multi-ro
 - an active conversation with queued rows
 It should not require `PendingUserQueryIndicator`; the new feature flag is the rollout switch for the new UI.
 ### `QueuedQueryModel`
-`QueuedQueryModel` owns only the new feature-on behavior:
+`QueuedQueryModel` owns general prompt queueing behavior regardless of `NewQueuedPromptUI`:
 - `queues: HashMap<AIConversationId, Vec<QueuedQuery>>`
 - `editing: Option<EditingRow>`
 - `collapsed: HashSet<AIConversationId>`
 - `queue_next_prompt_enabled: bool`
 `QueuedQueryOrigin::InitialCloudMode` remains non-user-managed. It renders in the new panel when the flag is on, but cannot be edited, deleted, reordered, or auto-fired by the local queue drain.
 ### Queue trigger routing
-Every trigger surface must branch on `FeatureFlag::NewQueuedPromptUI`:
-- Feature on: append to `QueuedQueryModel`.
-- Feature off: call the legacy `send_user_query_after_next_conversation_finished` path.
-Required call-site behavior:
-- `Input::maybe_queue_input_for_in_progress_conversation`:
-  - Feature on: append `QueuedQueryOrigin::AutoQueueToggle` to `QueuedQueryModel`.
-  - Feature off: call into the terminal view / workspace action path that ultimately uses `send_user_query_after_next_conversation_finished`.
-- `/queue <prompt>` in `app/src/terminal/input/slash_commands/mod.rs`:
-  - Feature on: append `QueuedQueryOrigin::QueueSlashCommand`.
-  - Feature off: use the legacy pending-query path with close and send-now enabled.
-- `/compact-and <prompt>` in `Workspace::summarize_active_ai_conversation`:
-  - Feature on: summarize immediately, then append `QueuedQueryOrigin::CompactAnd`.
-  - Feature off: summarize immediately, then queue the prompt through the legacy pending-query callback with send-now disabled.
-- `/fork-and-compact <prompt>` in `Workspace::handle_forked_conversation_prompts`:
-  - Feature on: summarize the fork immediately, then append `QueuedQueryOrigin::ForkAndCompact`.
-  - Feature off: summarize the fork immediately, then queue the prompt through the legacy pending-query callback with send-now disabled.
-- `WorkspaceAction::QueuePromptForConversation`:
-  - Feature on: append `QueuedQueryOrigin::AutoQueueToggle`.
-  - Feature off: use the legacy pending-query path.
+General prompt trigger surfaces should not branch to legacy behavior. They should always append to `QueuedQueryModel` with the appropriate origin:
+- `Input::maybe_queue_input_for_in_progress_conversation` appends `QueuedQueryOrigin::AutoQueueToggle`.
+- `/queue <prompt>` in `app/src/terminal/input/slash_commands/mod.rs` appends `QueuedQueryOrigin::QueueSlashCommand` while the selected conversation is in progress; the idle path still submits immediately.
+- `/compact-and <prompt>` in `Workspace::summarize_active_ai_conversation` summarizes immediately, then appends `QueuedQueryOrigin::CompactAnd`.
+- `/fork-and-compact <prompt>` in `Workspace::handle_forked_conversation_prompts` summarizes the fork immediately, then appends `QueuedQueryOrigin::ForkAndCompact`.
+- `WorkspaceAction::QueuePromptForConversation` appends `QueuedQueryOrigin::AutoQueueToggle`.
+`NewQueuedPromptUI` gates only the panel rendering/management surface for those general queued prompts, not whether they use the new queue model.
 ## Cloud Mode setup
 Cloud Mode setup is the most important compatibility requirement.
 When `NewQueuedPromptUI` is off:
 - Keep using the old `insert_cloud_mode_queued_user_query_block(prompt, ctx)` path in `app/src/terminal/view/pending_user_query.rs`.
 - Do not render the new input-adjacent queue panel for Cloud Mode setup.
-- Remove the old Cloud Mode pending block with the legacy removal function when the run lifecycle hands off to real transcript content, auth, cancellation, or failure.
+- Remove the old Cloud Mode pending block with the legacy removal function when the run lifecycle hands off to real transcript content, auth, cancellation, or a non-setup-v2 failure.
+- Keep the old Cloud Mode pending block across `CloudModeSetupV2` `Failed` events so the prompt remains visible above the failure/tombstone state.
 When `NewQueuedPromptUI` is on:
 - Use `QueuedQueryModel` with `QueuedQueryOrigin::InitialCloudMode`.
 - Store the returned `QueuedQueryId` on `AmbientAgentViewModel::cloud_mode_queued_query_id`.
 - Remove that row on the same lifecycle handoff events that removed the legacy block.
-- Keep the row across `Failed` only when the Cloud Mode setup UI intentionally needs the prompt visible above the failure/tombstone state.
+- Keep the row across `CloudModeSetupV2` `Failed` events so the prompt remains visible above the failure/tombstone state.
 Cloud Mode lifecycle handlers in `app/src/terminal/view/ambient_agent/view_impl.rs` should branch once and call the appropriate removal/insertion helper for the active feature path. The old helper should remain old-code-shaped; the new helper should remain queue-model-shaped.
 ## Terminal view wiring
-`TerminalView::new` should only construct and attach `QueuedPromptsPanelView` when `FeatureFlag::NewQueuedPromptUI.is_enabled()` is true. When the flag is off, `Input::queued_prompts_panel` stays `None` and the old rich-content block is responsible for queued prompt display.
-`TerminalView::handle_ai_controller_event` should branch on the feature flag when a conversation finishes:
-- Feature on: call `drain_queued_prompts(conversation_id, finish_reason, ctx)`.
-- Feature off: run the restored legacy `queued_prompt_callback` after unrelated `conversation_completed_callbacks`, matching the old ordering.
-When an active AI block is detected for a different conversation, the legacy feature-off path should keep the old guard that clears the pending block to avoid firing a stale callback later. The feature-on path should keep relying on `QueuedQueryModel` conversation scoping.
+`TerminalView::new` should only construct and attach `QueuedPromptsPanelView` when `FeatureFlag::NewQueuedPromptUI.is_enabled()` is true. When the flag is off, `Input::queued_prompts_panel` stays `None`; general queued prompts still live in `QueuedQueryModel`, and Cloud Mode setup uses the old rich-content block.
+`TerminalView::handle_ai_controller_event` should always call `drain_queued_prompts(conversation_id, finish_reason, ctx)` for general queued prompts. That drain is model-owned behavior, not panel-owned behavior.
+When an active AI block is detected for a different conversation, keep the restored legacy guard only for the Cloud Mode pending block path so stale Cloud Mode placeholder UI is cleared correctly. General queued prompts should rely on `QueuedQueryModel` conversation scoping.
 ## Rich content and selection
-Because the old UI returns as the feature-off path, restore the rich-content metadata and selection support:
+Because the old UI returns for Cloud Mode setup when `NewQueuedPromptUI` is off, restore the rich-content metadata and selection support:
 - `RichContentMetadata::PendingUserQuery { pending_user_query_block_handle }`
 - `RichContent::is_pending_user_query`
 - `read_selected_text_from_pending_user_query_block`
@@ -103,20 +90,20 @@ New panel-specific telemetry should be emitted only from `QueuedPromptsPanelView
 - `QueuedPrompt.Reordered`
 - `QueuedPrompt.PanelCollapseToggled`
 The enablement state for those telemetry events should be `FeatureFlag::NewQueuedPromptUI`, not `QueueSlashCommand`, because these events describe the new panel UI rather than queue trigger availability.
-Legacy feature-off queuing should keep existing telemetry behavior from slash-command acceptance and existing prompt submission paths. Do not add new telemetry to the restored legacy block.
+General queueing should keep existing telemetry behavior from slash-command acceptance and prompt submission paths. Do not add new telemetry to the restored Cloud Mode legacy block.
 ## Tests
 Update tests to cover both rollout paths.
 Feature-off tests:
-- `/queue` or the queue workspace action inserts the old `PendingUserQueryBlock` rich content.
+- `/queue` or the queue workspace action appends to `QueuedQueryModel` but does not construct/render `QueuedPromptsPanelView`.
 - Cloud Mode `DispatchedAgent` inserts the old pending user query block when `NewQueuedPromptUI` is off.
 - Cloud Mode lifecycle removal removes the old block when the transcript/harness handoff arrives.
 Feature-on tests:
 - Existing `QueuedQueryModel` and `QueuedPromptsPanelView` tests should set `FeatureFlag::NewQueuedPromptUI` where rendering or panel construction depends on it.
 - Cloud Mode `DispatchedAgent` appends an `InitialCloudMode` row and records `cloud_mode_queued_query_id`.
-- `drain_queued_prompts` only runs the model drain when the new flag is on.
+- `drain_queued_prompts` runs model drain behavior regardless of panel visibility.
 Regression checks:
 - With `NewQueuedPromptUI` off, the new panel is not constructed or rendered.
-- With `NewQueuedPromptUI` off, Cloud Mode setup never displays the new queued prompt panel.
+- With `NewQueuedPromptUI` off, Cloud Mode setup displays the old pending user query block and never displays the new queued prompt panel.
 - With `NewQueuedPromptUI` on, legacy `pending_user_query_view_id` remains unused for new queue rows.
 ## Validation
 Run:
@@ -125,7 +112,7 @@ Run:
 - Full presubmit before PR submission.
 Do not run the app as part of this change.
 ## Risks and mitigations
-- **Accidentally rewriting legacy behavior**: restore the old files and keep the feature-off path calling the old helpers. Only add conditional routing at call sites.
-- **Two sources of queue truth**: `QueuedQueryModel` is feature-on only for user-visible queued prompt management. The legacy callback remains feature-off only. Branch at trigger and drain call sites so both systems do not process the same prompt.
+- **Accidentally rewriting legacy Cloud Mode behavior**: restore the old files and keep the feature-off Cloud Mode path calling the old helpers. Do not reuse the old callback path for general prompt queueing.
+- **Two sources of queue UI truth**: `QueuedQueryModel` is the source of truth for general queued prompts regardless of panel visibility. The legacy pending block is only a Cloud Mode setup placeholder when `NewQueuedPromptUI` is off.
 - **Cloud Mode setup regression**: explicitly branch Cloud Mode insertion/removal helpers on `NewQueuedPromptUI` and add tests for both paths.
 - **Telemetry misattribution**: gate panel telemetry on `NewQueuedPromptUI` so the new UI metrics do not fire for legacy users.

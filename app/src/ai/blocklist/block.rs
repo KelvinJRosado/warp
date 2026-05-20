@@ -7,10 +7,13 @@ pub mod keyboard_navigable_buttons;
 pub mod model;
 pub mod number_shortcut_buttons;
 pub mod numbered_button;
+pub mod pending_user_query_block;
 pub mod secret_redaction;
 pub mod status_bar;
 pub mod toggleable_items;
 pub mod view_impl;
+
+pub use pending_user_query_block::{PendingUserQueryBlock, PendingUserQueryBlockEvent};
 
 #[cfg(feature = "agent_mode_debug")]
 use self::code_diff_view::FileDiff;
