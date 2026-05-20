@@ -548,17 +548,26 @@ impl AIConversation {
         self.conversation_usage_metadata.context_window_usage
     }
 
+    /// Total credits spent in the conversation, including both LLM inference
+    /// and platform (wall-clock) credits. The server tracks them as disjoint
+    /// fields starting with REV-1551; this sum keeps existing UI surfaces that
+    /// render a single total intact.
     pub fn credits_spent(&self) -> f32 {
-        (self.conversation_usage_metadata.credits_spent * 10.0).round() / 10.0
+        let total = self.conversation_usage_metadata.credits_spent
+            + self.conversation_usage_metadata.platform_credits_spent;
+        (total * 10.0).round() / 10.0
     }
 
     /// Test-only helper that sets the conversation's credit total directly.
     /// Used by unit tests that exercise downstream credit-aware logic
     /// (e.g. the orchestration credit rollup) without having to wire up a
-    /// full `StreamFinished` event.
+    /// full `StreamFinished` event. Writes the value into the inference
+    /// component (`credits_spent`) so the test exercise the bundled total
+    /// returned by [`Self::credits_spent`].
     #[cfg(test)]
     pub(crate) fn set_credits_spent_for_test(&mut self, credits: f32) {
         self.conversation_usage_metadata.credits_spent = credits;
+        self.conversation_usage_metadata.platform_credits_spent = 0.0;
     }
 
     // Credits spent over the last block, where the block comprises
@@ -1747,6 +1756,8 @@ impl AIConversation {
             self.conversation_usage_metadata.context_window_usage =
                 usage_metadata.context_window_usage;
             self.conversation_usage_metadata.credits_spent = usage_metadata.credits_spent;
+            self.conversation_usage_metadata.platform_credits_spent =
+                usage_metadata.platform_credits_spent;
 
             let mut token_usage: HashMap<_, ModelTokenUsage> = HashMap::new();
             for (model_id, usage) in usage_metadata.warp_token_usage {

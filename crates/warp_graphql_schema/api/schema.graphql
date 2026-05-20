@@ -790,7 +790,19 @@ type ConversationUsageMetadata {
   """Token usage using a user's API key, keyed by model."""
   byokTokenUsage: [TokenUsage!]!
   contextWindowUsage: Float!
+
+  """
+  The total number of inference credits spent so far in the conversation
+  (LLM request cost only, does not include platform credits).
+  """
   creditsSpent: Float!
+
+  """
+  The total number of platform credits spent so far in the conversation.
+  Tracked separately from creditsSpent so clients can display the breakdown
+  or sum them as needed.
+  """
+  platformCreditsSpent: Float!
   summarized: Boolean!
 
   """

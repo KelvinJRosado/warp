@@ -498,7 +498,12 @@ impl BlocklistAIController {
                 .conversation(&conv_id)
                 .map(|conversation| stream_finished::ConversationUsageMetadata {
                     context_window_usage: conversation.context_window_usage(),
+                    // AIConversation::credits_spent() already returns the sum of inference and
+                    // platform credits, so we surface the bundled total here and leave the
+                    // disjoint platform_credits_spent at 0 to avoid double-counting on viewers
+                    // that sum the two fields.
                     credits_spent: conversation.credits_spent(),
+                    platform_credits_spent: 0.0,
                     summarized: conversation.was_summarized(),
                     #[allow(deprecated)]
                     token_usage: conversation

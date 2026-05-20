@@ -158,7 +158,11 @@ fn create_finished_event_from_conversation(conversation: &AIConversation) -> Res
     let usage_metadata = Some(
         api_response_event::stream_finished::ConversationUsageMetadata {
             context_window_usage: conversation.context_window_usage(),
+            // AIConversation::credits_spent() already returns inference + platform; surface
+            // the bundled total here and leave platform_credits_spent at 0 so viewers don't
+            // double-count.
             credits_spent: conversation.credits_spent(),
+            platform_credits_spent: 0.0,
             summarized: conversation.was_summarized(),
             #[allow(deprecated)]
             token_usage: conversation

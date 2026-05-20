@@ -1316,7 +1316,14 @@ impl From<&stream_finished::ToolUsageMetadata> for ToolUsageMetadata {
 pub struct ConversationUsageMetadata {
     pub was_summarized: bool,
     pub context_window_usage: f32,
+    /// LLM inference credits spent across the conversation. Excludes platform
+    /// credits, which are tracked separately in `platform_credits_spent` so
+    /// they can be displayed alongside without double-counting.
     pub credits_spent: f32,
+    /// Wall-clock platform credits spent across the conversation. Defaulted
+    /// to zero for rows persisted before the field existed.
+    #[serde(default)]
+    pub platform_credits_spent: f32,
     #[serde(default)]
     pub credits_spent_for_last_block: Option<f32>,
     #[serde(default)]

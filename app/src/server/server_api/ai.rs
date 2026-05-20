@@ -2681,11 +2681,13 @@ fn convert_usage_metadata(
     summarized: bool,
     context_window_usage: f64,
     credits_spent: f64,
+    platform_credits_spent: f64,
 ) -> ConversationUsageMetadata {
     ConversationUsageMetadata {
         was_summarized: summarized,
         context_window_usage: context_window_usage as f32,
         credits_spent: credits_spent as f32,
+        platform_credits_spent: platform_credits_spent as f32,
         credits_spent_for_last_block: None,
         token_usage: vec![],
         tool_usage_metadata: Default::default(),
@@ -2700,6 +2702,7 @@ impl TryFrom<warp_graphql::ai::AIConversation> for ServerAIConversationMetadata 
             value.usage.usage_metadata.summarized,
             value.usage.usage_metadata.context_window_usage,
             value.usage.usage_metadata.credits_spent,
+            value.usage.usage_metadata.platform_credits_spent,
         );
         let metadata = value.metadata.try_into()?;
         let permissions = value.permissions.try_into()?;
@@ -2744,6 +2747,7 @@ impl TryFrom<warp_graphql::queries::list_ai_conversations::AIConversationMetadat
             value.usage.usage_metadata.summarized,
             value.usage.usage_metadata.context_window_usage,
             value.usage.usage_metadata.credits_spent,
+            value.usage.usage_metadata.platform_credits_spent,
         );
         let metadata = value.metadata.try_into()?;
         let permissions = value.permissions.try_into()?;
