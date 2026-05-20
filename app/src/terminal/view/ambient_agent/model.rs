@@ -397,6 +397,22 @@ impl AmbientAgentViewModel {
         self.set_setup_command_group_visibility(group_id, is_visible, ctx);
     }
 
+    /// Tear down the active "Running setup commands…" chip. Called by the
+    /// viewer event loop in response to an explicit `AmbientSetupPhaseEnded`
+    /// shared-session marker (used by the empty-prompt local-to-cloud handoff
+    /// where the cloud agent skips the initial LLM turn and never emits an
+    /// `AppendedExchange` to drive the normal teardown path).
+    ///
+    /// Resolves the current group from `setup_command_state().current_group_id()`
+    /// (the canonical lookup also used by `set_setup_command_visibility`). Idempotent:
+    /// the inner `finish_setup_command_group` / `set_setup_command_group_visibility`
+    /// helpers no-op when the group is not running or already hidden.
+    pub(crate) fn tear_down_active_setup_command_group(&mut self, ctx: &mut ModelContext<Self>) {
+        let group_id = self.setup_commands_state.current_group_id();
+        self.finish_setup_command_group(group_id, ctx);
+        self.set_setup_command_group_visibility(group_id, false, ctx);
+    }
+
     /// Handles CloudModel events to keep environment_id in sync.
     fn handle_cloud_model_event(&mut self, event: &CloudModelEvent, ctx: &mut ModelContext<Self>) {
         match event {

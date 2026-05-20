@@ -2375,6 +2375,14 @@ impl AgentDriver {
                             ctx,
                         );
                     }
+                    // Emit AmbientSetupPhaseEnded so the viewer tears down the
+                    // Cloud Mode Setup V2 chip and clears the pre-first-exchange
+                    // gate without waiting for an AppendedExchange that's never
+                    // going to arrive.
+                    terminal
+                        .model
+                        .lock()
+                        .send_ambient_setup_phase_ended_for_shared_session();
                 })
             });
             let _ = tx.send(SDKConversationOutputStatus::Success);
