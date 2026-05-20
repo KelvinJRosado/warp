@@ -8,6 +8,8 @@ use crate::ai::agent::{
     AIAgentInput, CreateDocumentsResult, EditDocumentsResult, ReadFilesResult, SubagentCall,
     SubagentType, TodoOperation, UploadArtifactResult,
 };
+use crate::ai::agent_conversations_model::AgentConversationsModel;
+use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::util::truncation::truncate_from_end;
 use ai::agent::file_locations::group_file_contexts_for_display;
 
@@ -18,6 +20,7 @@ use crate::ai::blocklist::block::view_impl::common::{
 use crate::ai::blocklist::inline_action::aws_bedrock_credentials_error::AwsBedrockCredentialsErrorView;
 use crate::ai::blocklist::inline_action::create_or_edit_document::CreateOrEditDocumentAction;
 use crate::ai::blocklist::secret_redaction::SecretRedactionState;
+use crate::ai::blocklist::usage::rollup::compute_orchestration_rollup;
 use crate::ai::blocklist::view_util::format_credits;
 use crate::ai::skills::SkillOpenOrigin;
 use crate::ai::skills::{
@@ -127,6 +130,7 @@ use super::{
     render_citation_chips, todos::render_completed_todo_items, WithContentItemSpacing,
     CONTENT_ITEM_VERTICAL_MARGIN,
 };
+use crate::ai::blocklist::inline_action::run_agents_card_view::RunAgentsCardView;
 use warpui::{
     elements::{
         Align, Border, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
@@ -147,11 +151,11 @@ const BLOCKED_ACTION_MESSAGE_FOR_UPLOADING_ARTIFACT: &str = "Grant access to upl
 /// Data required to render the AI block output component.
 #[derive(Copy, Clone)]
 pub(crate) struct Props<'a> {
-    pub(super) model: &'a dyn AIBlockModel<View = AIBlock>,
+    pub(crate) model: &'a dyn AIBlockModel<View = AIBlock>,
     pub(super) state_handles: &'a AIBlockStateHandles,
     pub(super) action_buttons: &'a HashMap<AIAgentActionId, ActionButtons>,
     pub(super) view_screenshot_buttons: &'a HashMap<AIAgentActionId, ui_components::button::Button>,
-    pub(super) action_model: &'a ModelHandle<BlocklistAIActionModel>,
+    pub(crate) action_model: &'a ModelHandle<BlocklistAIActionModel>,
     pub(super) editor_views: &'a [EmbeddedCodeEditorView],
     pub(super) current_working_directory: Option<&'a String>,
     pub(super) shell_launch_data: Option<&'a ShellLaunchData>,
@@ -192,6 +196,12 @@ pub(crate) struct Props<'a> {
     pub(super) aws_bedrock_credentials_error_view:
         Option<&'a ViewHandle<AwsBedrockCredentialsErrorView>>,
     pub(super) imported_comments: &'a HashMap<AIAgentActionId, ImportedCommentGroup>,
+    /// Per-orchestrate-action card view. Each `RunAgentsCardView` owns
+    /// its own edit state, button + picker handles, and in-flight
+    /// spawning snapshot; AIBlock just lazily creates the view per
+    /// `AIAgentActionId` and embeds it via `ChildView` when the action
+    /// is rendered. Multi-card lifecycle = AIBlock lifecycle.
+    pub(crate) run_agents_card_views: &'a HashMap<AIAgentActionId, ViewHandle<RunAgentsCardView>>,
     #[cfg(feature = "local_fs")]
     pub(crate) resolved_code_block_paths:
         &'a HashMap<std::path::PathBuf, Option<std::path::PathBuf>>,
@@ -201,6 +211,12 @@ pub(crate) struct Props<'a> {
     pub(super) thinking_display_mode: crate::settings::ThinkingDisplayMode,
     pub(super) conversation_has_imported_comments: bool,
     pub(super) ask_user_question_view: Option<&'a ViewHandle<AskUserQuestionView>>,
+    /// `true` when this block belongs to a cloud agent pane that is still in its setup
+    /// phase (running environment startup commands before the first agent turn). Used to
+    /// hide the response footer (thumbs up/down, credit usage, fork) until the agent has
+    /// produced real output — otherwise the footer renders awkwardly above the still-
+    /// pending optimistic user prompt.
+    pub(super) is_cloud_agent_pre_first_exchange: bool,
 }
 
 pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
@@ -212,6 +228,24 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
     let is_conversation_in_progress = conversation_status.is_some_and(|s| s.is_in_progress());
 
     let status = props.model.status(app);
+    let has_expanded_last_requested_command = status.output_to_render().is_some_and(|output| {
+        let output = output.get();
+        output.messages.last().is_some_and(|message| {
+            let AIAgentOutputMessageType::Action(action) = &message.message else {
+                return false;
+            };
+
+            matches!(
+                &action.action,
+                AIAgentActionType::RequestCommandOutput { .. }
+            ) && props
+                .requested_commands
+                .get(&action.id)
+                .is_some_and(|requested_command| {
+                    requested_command.view.as_ref(app).is_header_expanded()
+                })
+        })
+    });
     match status {
         // Ignore errors if the response is not yet complete-- it could be a deserialization
         // error that corrects itself when more output is streamed in.
@@ -230,7 +264,8 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
                 // when the entire response is complete to avoid intermediate states.
                 let mut should_render_references_section = is_complete && request_type.is_active();
                 let mut should_render_suggestions = is_complete
-                    && props.model.is_latest_non_passive_exchange_in_root_task(app)
+                    && props.model.is_latest_visible_exchange_in_root_task(app)
+                    && !has_expanded_last_requested_command
                     && !is_conversation_in_progress
                     && !is_output_for_static_prompt_suggestions
                     && request_type.is_active();
@@ -240,11 +275,13 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
                     request_type.is_passive_code_diff() && props.has_accepted_edits;
 
                 let mut should_render_footer =
-                    (props.model.is_latest_non_passive_exchange_in_root_task(app)
+                    (props.model.is_latest_visible_exchange_in_root_task(app)
                         || requires_special_footer)
+                        && !has_expanded_last_requested_command
                         && !is_output_for_static_prompt_suggestions
                         && !is_conversation_in_progress
                         && request_type.is_active()
+                        && !props.is_cloud_agent_pre_first_exchange
                         && !status
                             .error()
                             .map(|e| e.is_invalid_api_key())
@@ -755,7 +792,7 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
                                 },
                             id,
                             ..
-                        }) if FeatureFlag::Orchestration.is_enabled() => {
+                        }) if FeatureFlag::OrchestrationV2.is_enabled() => {
                             should_render_footer = false;
                             should_render_suggestions = false;
                             output_items.add_child(orchestration::render_start_agent(
@@ -769,6 +806,22 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
                             ));
                         }
                         AIAgentOutputMessageType::Action(AIAgentAction {
+                            action: AIAgentActionType::RunAgents(_req),
+                            id,
+                            ..
+                        }) if FeatureFlag::RunAgentsTool.is_enabled() => {
+                            // Embed the per-action `RunAgentsCardView`
+                            // via `ChildView`. The view renders a
+                            // "Configuring agents..." placeholder while
+                            // streaming, then transitions to the full
+                            // confirmation card once complete.
+                            should_render_footer = false;
+                            should_render_suggestions = false;
+                            if let Some(card_view) = props.run_agents_card_views.get(id) {
+                                output_items.add_child(ChildView::new(card_view).finish());
+                            }
+                        }
+                        AIAgentOutputMessageType::Action(AIAgentAction {
                             action:
                                 AIAgentActionType::SendMessageToAgent {
                                     addresses,
@@ -777,7 +830,7 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
                                 },
                             id,
                             ..
-                        }) if FeatureFlag::Orchestration.is_enabled() => {
+                        }) if FeatureFlag::OrchestrationV2.is_enabled() => {
                             should_render_footer = false;
                             should_render_suggestions = false;
                             output_items.add_child(orchestration::render_send_message(
@@ -865,14 +918,11 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
                             }
                         }
                         AIAgentOutputMessageType::MessagesReceivedFromAgents { messages }
-                            if FeatureFlag::Orchestration.is_enabled() =>
+                            if FeatureFlag::OrchestrationV2.is_enabled() =>
                         {
                             output_items.add_child(
                                 orchestration::render_messages_received_from_agents(
-                                    messages,
-                                    props,
-                                    &output_message.id,
-                                    app,
+                                    messages, props, app,
                                 ),
                             );
                         }
@@ -893,6 +943,7 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
                                 SubagentType::ConversationSearch {
                                     ref query,
                                     ref conversation_id,
+                                    ref agent_run_id,
                                 },
                             task_id: subagent_task_id,
                         }) => {
@@ -921,13 +972,12 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
                                 icons::yellow_running_icon(appearance)
                             };
 
-                            // Resolve which conversation is being searched. If
-                            // conversation_id is set and differs from the current
-                            // conversation, try to resolve a display name from
-                            // the history model; otherwise label it "this
-                            // conversation".
-                            let conversation_label =
-                                conversation_id.as_ref().and_then(|target_id| {
+                            // Resolve which conversation is being searched. Conversation IDs use
+                            // conversation history titles; agent run IDs use ambient task titles
+                            // once fetched. If neither target exists, label it "this conversation".
+                            let target_label = conversation_id
+                                .as_ref()
+                                .and_then(|target_id| {
                                     let history = BlocklistAIHistoryModel::as_ref(app);
                                     let token = ServerConversationToken::new(target_id.clone());
                                     let local_id =
@@ -945,7 +995,25 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
                                     let title = target_conversation
                                         .and_then(|c| c.title())
                                         .map(|q| truncate_from_end(&q, 40));
-                                    Some(title.unwrap_or_else(|| target_id.clone()))
+                                    Some((
+                                        "conversation",
+                                        title.unwrap_or_else(|| target_id.clone()),
+                                    ))
+                                })
+                                .or_else(|| {
+                                    let target_id = agent_run_id.as_ref()?;
+                                    let title = target_id
+                                        .parse::<AmbientAgentTaskId>()
+                                        .ok()
+                                        .and_then(|task_id| {
+                                            AgentConversationsModel::as_ref(app)
+                                                .get_task_data(&task_id)
+                                        })
+                                        .map(|task| truncate_from_end(&task.title, 40));
+                                    Some((
+                                        "agent run",
+                                        title.unwrap_or_else(|| truncate_from_end(target_id, 40)),
+                                    ))
                                 });
 
                             let done = is_finished || is_cancelled;
@@ -953,10 +1021,11 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
 
                             let mut fragments: Vec<FormattedTextFragment> =
                                 vec![FormattedTextFragment::plain_text(format!("{verb} "))];
-                            match &conversation_label {
-                                Some(name) => {
-                                    fragments
-                                        .push(FormattedTextFragment::plain_text("conversation "));
+                            match &target_label {
+                                Some((target_kind, name)) => {
+                                    fragments.push(FormattedTextFragment::plain_text(format!(
+                                        "{target_kind} "
+                                    )));
                                     fragments.push(FormattedTextFragment::weighted(
                                         name.as_str(),
                                         Some(markdown_parser::weight::CustomWeight::Bold),
@@ -1106,7 +1175,8 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
                 .finish(),
             );
 
-            if props.model.is_latest_non_passive_exchange_in_root_task(app)
+            if props.model.is_latest_visible_exchange_in_root_task(app)
+                && !has_expanded_last_requested_command
                 && !props.model.is_restored()
                 && !error.is_invalid_api_key()
             {
@@ -3198,10 +3268,25 @@ fn render_usage_button(props: Props, app: &AppContext) -> Box<dyn Element> {
         return Empty::new().finish();
     };
 
+    // Optional orchestration credit rollup. When the conversation has at
+    // least one locally-loaded descendant with credits spent, the pill's
+    // headline number and "has any usage" suppression check both switch
+    // over to the orchestration total (PRODUCT invariants 11, 11b). The
+    // `(+N)` last-block annotation below stays bound to the
+    // orchestrator's own credits. The rollup helper returns `None` for
+    // conversations with no descendants, so callers that aren't
+    // orchestrators pay only the cost of one descendant-index probe.
+    let rollup =
+        compute_orchestration_rollup(conversation.id(), BlocklistAIHistoryModel::as_ref(app));
+
     // If this conversation has no usage metadata (e.g. a forked conversation from
     // mid-way through a prior conversation where the server did not send
     // ConversationUsageMetadata), avoid rendering the usage button entirely.
-    let has_any_usage = conversation.credits_spent() > 0.0
+    let headline_credits = rollup
+        .as_ref()
+        .map(|r| r.total_credits)
+        .unwrap_or_else(|| conversation.credits_spent());
+    let has_any_usage = headline_credits > 0.0
         || conversation.credits_spent_for_last_block().is_some()
         || !conversation.token_usage().is_empty()
         || conversation.tool_usage_metadata().total_tool_calls() > 0;
@@ -3218,7 +3303,7 @@ fn render_usage_button(props: Props, app: &AppContext) -> Box<dyn Element> {
         Icon::ChevronRight
     };
 
-    let total_credits_spent = conversation.credits_spent();
+    let total_credits_spent = headline_credits;
     let mut credit_usage_text = format_credits(total_credits_spent);
     if let Some(credits_spent_for_last_block) = conversation.credits_spent_for_last_block() {
         // Only show the credits spent for the last block if it is different from the total credits spent

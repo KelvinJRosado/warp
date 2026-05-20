@@ -95,6 +95,12 @@ impl VerticalTabsPaneContextMenuTarget {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AutoCloudHandoffTrigger {
+    MacOsSleep,
+    Uri,
+}
+
 #[derive(Debug, Clone)]
 pub enum WorkspaceAction {
     ActivateTab(usize),
@@ -112,6 +118,10 @@ pub enum WorkspaceAction {
     RenamePane(PaneViewLocator),
     ResetPaneName(PaneViewLocator),
     RenameActiveTab,
+    /// Renames the focused pane in the active tab. Mirrors `RenameActiveTab`
+    /// so the action is reachable from the binding registry / Command Palette
+    /// (see #9351). The context-menu path keeps using `RenamePane(locator)`.
+    RenameActivePane,
     SetActiveTabName(String),
     /// Sets the manual color override for the active tab.
     ///
@@ -160,7 +170,6 @@ pub enum WorkspaceAction {
     ToggleTabConfigsMenu,
     ToggleNewSessionMenu {
         position: Vector2F,
-        is_vertical_tabs: bool,
     },
     SelectNewSessionMenuItem(NewSessionMenuItem),
     AutoupdateFailureLink,
@@ -478,6 +487,38 @@ pub enum WorkspaceAction {
     },
     /// Insert the /fork slash command into the active terminal's input.
     InsertForkSlashCommand,
+    /// Open a local-to-cloud handoff pane next to the active conversation
+    /// (REMOTE-1486). Triggered by the `/move-to-cloud` slash command
+    /// and the footer chip of the same name. The dispatch site reads the
+    /// active conversation's `server_conversation_token` and gates on
+    /// `FeatureFlag::OzHandoff && FeatureFlag::HandoffLocalCloud`.
+    /// Falls through to splitting a fresh cloud-mode pane when the active
+    /// conversation isn't handoff-able (no synced server token, empty, or no
+    /// active conversation at all).
+    OpenLocalToCloudHandoffPane {
+        #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+        launch: Option<crate::ai::blocklist::handoff::PendingCloudLaunch>,
+        #[cfg(not(all(feature = "local_fs", not(target_family = "wasm"))))]
+        launch: Option<()>,
+        environment_id: Option<crate::server::ids::SyncId>,
+        entry_point: crate::ai::ambient_agents::telemetry::HandoffEntryPoint,
+    },
+    /// Automatically hand off the active running local agent conversation in the
+    /// given terminal view to Cloud Mode.
+    AutoHandoffActiveAgentToCloud {
+        terminal_view_id: EntityId,
+        conversation_id: AIConversationId,
+        trigger: AutoCloudHandoffTrigger,
+    },
+    /// Show the environment creation modal during `&` handoff compose when no
+    /// environments exist.
+    ShowHandoffEnvironmentCreationModal,
+    ShowCloudModeV2EnvironmentCreationModal,
+    /// Open the workspace modal for creating a new managed auth secret.
+    /// Dispatched by orchestration card pickers' "New API key…" item.
+    OpenCreateAuthSecretModal {
+        harness: warp_cli::agent::Harness,
+    },
     /// Summarize the active AI conversation in the focused pane.
     SummarizeAIConversation {
         prompt: Option<String>,
@@ -551,6 +592,12 @@ pub enum WorkspaceAction {
     /// Reset the OpenWarp launch modal dismissed state (for debugging)
     #[cfg(debug_assertions)]
     ResetOpenWarpLaunchModalState,
+    /// Open the Orchestration Launch Modal (for debugging)
+    #[cfg(debug_assertions)]
+    OpenOrchestrationLaunchModal,
+    /// Reset the orchestration launch modal dismissed state (for debugging)
+    #[cfg(debug_assertions)]
+    ResetOrchestrationLaunchModalState,
     /// Install the opencode-warp plugin from GitHub into the global opencode config.
     #[cfg(debug_assertions)]
     InstallOpenCodeWarpPlugin,
@@ -584,9 +631,8 @@ pub enum WorkspaceAction {
         conversation_id: AIConversationId,
         terminal_view_id: Option<EntityId>,
     },
-    /// Open an ambient agent session by joining its shared session.
-    /// Used when the sandbox is running or when we need to view a live session.
-    OpenAmbientAgentSession {
+    /// Open the canonical ambient agent conversation pane and attach it to a live session.
+    OpenOrAttachAmbientAgentConversation {
         session_id: SessionId,
         task_id: AmbientAgentTaskId,
     },
@@ -717,6 +763,7 @@ impl WorkspaceAction {
             | RenamePane(_)
             | ResetPaneName(_)
             | RenameActiveTab
+            | RenameActivePane
             | SetActiveTabName(_)
             | SetActiveTabColor(_)
             | CloseTab(_)
@@ -913,7 +960,7 @@ impl WorkspaceAction {
             | ShowRewindConfirmationDialog { .. }
             | ExecuteRewindAIConversation { .. }
             | ExecuteDeleteConversation { .. }
-            | OpenAmbientAgentSession { .. }
+            | OpenOrAttachAmbientAgentConversation { .. }
             | OpenConversationTranscriptViewer { .. }
             | OpenLightbox { .. }
             | UpdateLightboxImage { .. }
@@ -928,6 +975,11 @@ impl WorkspaceAction {
             | TabConfigSidecarRemoveConfig { .. }
             | OpenSettingsFile
             | FixSettingsWithOz { .. }
+            | OpenLocalToCloudHandoffPane { .. }
+            | AutoHandoffActiveAgentToCloud { .. }
+            | ShowHandoffEnvironmentCreationModal
+            | ShowCloudModeV2EnvironmentCreationModal
+            | OpenCreateAuthSecretModal { .. }
             | OpenNetworkLogPane => false,
             #[cfg(debug_assertions)]
             ShowHoaOnboardingFlow => false,
@@ -941,6 +993,8 @@ impl WorkspaceAction {
             | ResetOzLaunchModalState
             | OpenOpenWarpLaunchModal
             | ResetOpenWarpLaunchModalState
+            | OpenOrchestrationLaunchModal
+            | ResetOrchestrationLaunchModalState
             | InstallOpenCodeWarpPlugin
             | UseLocalOpenCodeWarpPlugin => false,
             #[cfg(not(target_family = "wasm"))]

@@ -171,6 +171,22 @@ pub static FORK: LazyLock<StaticCommand> = LazyLock::new(|| {
     }
 });
 
+pub static MOVE_TO_CLOUD: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
+    name: "/handoff",
+    description: "Hand off this conversation to a cloud agent",
+    icon_path: "bundled/svg/upload-cloud-01.svg",
+    availability: Availability::AGENT_VIEW
+        | Availability::ACTIVE_CONVERSATION
+        | Availability::AI_ENABLED
+        | Availability::NOT_CLOUD_AGENT,
+    auto_enter_ai_mode: false,
+    argument: Some(
+        Argument::optional()
+            .with_hint_text("<optional follow-up prompt>")
+            .with_execute_on_selection(),
+    ),
+});
+
 pub const OPEN_CODE_REVIEW: StaticCommand = StaticCommand {
     name: "/open-code-review",
     description: "Open code review",
@@ -686,6 +702,13 @@ fn all_commands() -> Vec<StaticCommand> {
         commands.push(CLOUD_AGENT.clone());
     }
 
+    if FeatureFlag::OzHandoff.is_enabled()
+        && FeatureFlag::HandoffLocalCloud.is_enabled()
+        && cfg!(all(feature = "local_fs", not(target_family = "wasm")))
+    {
+        commands.push(MOVE_TO_CLOUD.clone());
+    }
+
     if FeatureFlag::InlineProfileSelector.is_enabled() {
         commands.push(PROFILE.clone());
     }
@@ -699,7 +722,7 @@ fn all_commands() -> Vec<StaticCommand> {
         commands.push(OPEN_REPO);
     }
 
-    if FeatureFlag::Orchestration.is_enabled() {
+    if FeatureFlag::OrchestrationV2.is_enabled() {
         commands.push(ORCHESTRATE.clone());
     }
 

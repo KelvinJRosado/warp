@@ -26,7 +26,7 @@ use crate::{
     editor::InteractionState,
     features::FeatureFlag,
     notebooks::editor::rich_text_styles,
-    settings::{AppEditorSettings, CodeEditorLineNumberMode, FontSettings},
+    settings::{AppEditorSettings, FontSettings},
     view_components::find::FindDirection,
 };
 use ai::diff_validation::DiffDelta;
@@ -35,9 +35,12 @@ use num_traits::SaturatingSub;
 use pathfinder_geometry::vector::vec2f;
 use settings::Setting as _;
 use std::fmt::Debug;
+use std::path::Path;
 use std::rc::Rc;
-use std::{collections::HashMap, ops::Range};
-use std::{collections::HashSet, path::Path};
+use std::{
+    collections::{HashMap, HashSet},
+    ops::Range,
+};
 use string_offset::CharOffset;
 use vec1::{vec1, Vec1};
 use vim::vim::{Direction, InsertPosition, VimMode, VimModel, VimState, VimSubscriber};
@@ -66,6 +69,7 @@ use warp_editor::{
     search::{SearchEvent, Searcher, MATCH_FILL, SELECTED_MATCH_FILL},
 };
 use warp_util::content_version::ContentVersion;
+use warp_util::standardized_path::StandardizedPath;
 use warpui::{
     elements::{
         new_scrollable::{
@@ -1435,9 +1439,15 @@ impl CodeEditorView {
         });
     }
 
-    pub fn set_language_with_path(&mut self, path: &Path, ctx: &mut ViewContext<Self>) {
+    pub fn set_language_with_path(&mut self, path: &StandardizedPath, ctx: &mut ViewContext<Self>) {
         self.model.update(ctx, |model, ctx| {
             model.set_language_with_path(path, ctx);
+        });
+    }
+
+    pub fn set_language_with_local_path(&mut self, path: &Path, ctx: &mut ViewContext<Self>) {
+        self.model.update(ctx, |model, ctx| {
+            model.set_language_with_local_path(path, ctx);
         });
     }
 
@@ -2381,8 +2391,14 @@ impl View for CodeEditorView {
         }
         if let Some(vim_mode) = self.vim_mode(app) {
             context.set.insert("Vim");
-            if vim_mode == VimMode::Normal {
-                context.set.insert("VimNormalMode");
+            match vim_mode {
+                VimMode::Normal => {
+                    context.set.insert("VimNormalMode");
+                }
+                VimMode::Visual(_) => {
+                    context.set.insert("VimVisualMode");
+                }
+                _ => {}
             }
         }
         if self.find_bar.is_some() {
@@ -2442,7 +2458,7 @@ impl CodeEditorView {
         let line_number_config = self.line_number_config(ctx)?;
         let line_count = LineCount::from(one_based_line_number.checked_sub(1)?);
 
-        if line_number_config.mode == CodeEditorLineNumberMode::Relative {
+        if line_number_config.mode == crate::settings::CodeEditorLineNumberMode::Relative {
             if let Some(active_line_number) = line_number_config.active_line_number {
                 if active_line_number != line_count {
                     return Some(
