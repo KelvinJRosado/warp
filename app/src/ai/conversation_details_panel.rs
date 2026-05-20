@@ -2,7 +2,7 @@
 
 use std::{collections::HashMap, str::FromStr, sync::Arc};
 
-use chrono::{DateTime, Duration, Local};
+use chrono::{DateTime, Local};
 use instant::Instant;
 use parking_lot::RwLock;
 use pathfinder_color::ColorU;
@@ -203,7 +203,7 @@ pub struct ConversationDetailsData {
     /// Total credits spent on the conversation/task.
     credits: Option<f32>,
     /// Total duration of the conversation.
-    run_time: Option<Duration>,
+    run_time: Option<String>,
     /// Artifacts created during the conversation (plans, PRs, branches).
     artifacts: Vec<Artifact>,
     /// Action to dispatch when "Open" button is clicked.
@@ -285,7 +285,7 @@ impl ConversationDetailsData {
             if let Some(finish_time) = last.finish_time {
                 let duration = finish_time.signed_duration_since(first.start_time);
                 if duration.num_seconds() >= 0 {
-                    run_time = Some(duration);
+                    run_time = Some(human_readable_precise_duration(duration));
                 }
             }
             // Created at from first exchange
@@ -379,7 +379,7 @@ impl ConversationDetailsData {
             created_at: Some(task.created_at.with_timezone(&Local)),
             artifacts: task.artifacts.clone(),
             credits,
-            run_time: task.run_time(),
+            run_time: task.run_time.clone(),
             open_action,
             creator: task
                 .creator
@@ -456,7 +456,9 @@ impl ConversationDetailsData {
                 executor,
                 created_at,
                 credits,
-                run_time: task.and_then(AmbientAgentTask::run_time),
+                run_time: task
+                    .and_then(|task| task.run_time.clone())
+                    .or_else(|| entry.display.run_time.clone()),
                 artifacts: entry.display.artifacts.clone(),
                 open_action,
                 source_prompt,
@@ -1920,10 +1922,9 @@ impl View for ConversationDetailsPanel {
             );
         }
 
-        if let Some(duration) = self.data.run_time {
-            let formatted = human_readable_precise_duration(duration);
+        if let Some(formatted) = &self.data.run_time {
             content.add_child(
-                Container::new(self.render_simple_field("Run time", &formatted, appearance))
+                Container::new(self.render_simple_field("Run time", formatted, appearance))
                     .with_margin_bottom(FIELD_SPACING)
                     .finish(),
             );
