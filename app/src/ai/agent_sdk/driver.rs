@@ -371,6 +371,11 @@ pub enum AgentRunPrompt {
         skill: Option<ParsedSkill>,
         /// Directory where task attachments were downloaded.
         attachments_dir: Option<String>,
+        /// When true, the cloud agent skips the initial LLM turn. Used by the
+        /// empty-prompt local-to-cloud handoff path where there is no user
+        /// content to act on; the user's first follow-up drives the first
+        /// real turn instead.
+        skip_initial_turn: bool,
     },
 }
 
@@ -2037,6 +2042,9 @@ impl AgentDriver {
             AgentRunPrompt::ServerSide {
                 skill,
                 attachments_dir,
+                // `skip_initial_turn` only suppresses the Oz harness's initial dispatch;
+                // third-party harnesses always resolve the server-side prompt.
+                skip_initial_turn: _,
             } => {
                 let skill = skill
                     .as_ref()
@@ -2341,6 +2349,38 @@ impl AgentDriver {
     ) -> Receiver<SDKConversationOutputStatus> {
         // Create a oneshot channel to signal task completion.
         let (tx, rx) = oneshot::channel();
+
+        // Empty-prompt local-to-cloud handoff: the sandboxed Oz CLI is invoked
+        // with `--skip-initial-turn` because there is no user content to act on
+        // (no prompt, no "continue in the cloud" substitution, no snapshot
+        // rehydration). Skip the `StartFromAmbientRunPrompt` dispatch entirely
+        // so the LLM does not hallucinate a turn against an empty user message.
+        // The user's first follow-up via `submit_run_followup` will drive the
+        // first real turn. We still enter the agent view so the pane is ready
+        // for that follow-up, and immediately resolve the status receiver to
+        // `Success` so the driver loop in `AgentDriver::run` does not hang.
+        if let AgentRunPrompt::ServerSide {
+            skip_initial_turn: true,
+            ..
+        } = &task_prompt
+        {
+            let restored_conversation_id = self.restored_conversation_id;
+            self.terminal_driver.update(ctx, |td, ctx| {
+                td.with_terminal_view(ctx, |terminal, ctx| {
+                    if FeatureFlag::AgentView.is_enabled() {
+                        terminal.enter_agent_view(
+                            None,
+                            restored_conversation_id,
+                            AgentViewEntryOrigin::Cli,
+                            ctx,
+                        );
+                    }
+                })
+            });
+            let _ = tx.send(SDKConversationOutputStatus::Success);
+            return rx;
+        }
+
         let run_exit = IdleTimeoutSender::new(tx);
 
         // Subscribe before the conversation starts.
@@ -2670,6 +2710,9 @@ impl AgentDriver {
                 AgentRunPrompt::ServerSide {
                     skill,
                     attachments_dir,
+                    // The `skip_initial_turn: true` case short-circuited above
+                    // before this match. Any value reaching here is `false`.
+                    skip_initial_turn: _,
                 } => {
                     let Some(task_id) = self.task_id else {
                         log::error!("ServerSide prompt without task_id");

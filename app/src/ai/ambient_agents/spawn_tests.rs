@@ -713,6 +713,7 @@ async fn poll_retries_transient_429_errors() {
         conversation_id: None,
         initial_snapshot_token: None,
         snapshot_disabled: None,
+        skip_initial_turn: None,
     };
 
     let mut stream = Box::pin(spawn_task(request, ai_client, None));
@@ -781,6 +782,7 @@ async fn poll_fails_on_permanent_http_error() {
         conversation_id: None,
         initial_snapshot_token: None,
         snapshot_disabled: None,
+        skip_initial_turn: None,
     };
 
     let mut stream = Box::pin(spawn_task(request, ai_client, None));
@@ -850,6 +852,7 @@ async fn poll_gives_up_after_max_transient_retries() {
         conversation_id: None,
         initial_snapshot_token: None,
         snapshot_disabled: None,
+        skip_initial_turn: None,
     };
 
     let mut stream = Box::pin(spawn_task(request, ai_client, None));
@@ -913,6 +916,7 @@ async fn poll_stops_on_terminal_failure_like_state() {
         conversation_id: None,
         initial_snapshot_token: None,
         snapshot_disabled: None,
+        skip_initial_turn: None,
     };
 
     let mut stream = Box::pin(spawn_task(request, ai_client, None));
@@ -1059,6 +1063,7 @@ async fn poll_for_session_join_info_waits_until_link_is_available() {
         conversation_id: None,
         initial_snapshot_token: None,
         snapshot_disabled: None,
+        skip_initial_turn: None,
     };
 
     let mut stream = Box::pin(spawn_task(request, ai_client, None));

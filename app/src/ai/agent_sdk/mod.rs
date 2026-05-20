@@ -480,6 +480,7 @@ fn build_server_side_task(
         prompt: AgentRunPrompt::ServerSide {
             skill,
             attachments_dir: None,
+            skip_initial_turn: args.skip_initial_turn,
         },
         model: model_override,
         profile,
@@ -1205,6 +1206,7 @@ impl AgentDriverRunner {
         {
             *dir = attachments_dir;
         }
+        // `task.prompt.skip_initial_turn` is preserved across this update.
 
         Ok(task_conversation_id)
     }

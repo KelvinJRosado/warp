@@ -231,6 +231,29 @@ fn agent_run_accepts_idle_on_complete_duration() {
 }
 
 #[test]
+fn agent_run_accepts_skip_initial_turn_with_task_id() {
+    let args = Args::try_parse_from([
+        "warp",
+        "agent",
+        "run",
+        "--task-id",
+        "abc",
+        "--skip-initial-turn",
+    ])
+    .unwrap();
+
+    let Some(Command::CommandLine(boxed_cmd)) = args.command else {
+        panic!("Expected `warp agent run` command");
+    };
+    let CliCommand::Agent(AgentCommand::Run(run_args)) = boxed_cmd.as_ref() else {
+        panic!("Expected `warp agent run` command");
+    };
+
+    assert_eq!(run_args.task_id.as_deref(), Some("abc"));
+    assert!(run_args.skip_initial_turn);
+}
+
+#[test]
 fn agent_run_accepts_snapshot_flags() {
     let args = Args::try_parse_from([
         "warp",

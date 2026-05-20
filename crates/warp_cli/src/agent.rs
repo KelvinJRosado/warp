@@ -368,6 +368,12 @@ pub struct RunAgentArgs {
     /// "claude" delegates to the `claude` CLI.
     #[arg(long = "harness", value_name = "HARNESS", default_value_t = Harness::Oz, hide = true)]
     pub harness: Harness,
+
+    /// Skip the initial LLM turn for this run. Used by the empty-prompt cloud-handoff
+    /// path so the cloud agent comes up ready for follow-up without hallucinating a
+    /// response against an empty user message.
+    #[arg(long = "skip-initial-turn", hide = true, requires = "task_id")]
+    pub skip_initial_turn: bool,
 }
 
 impl RunAgentArgs {

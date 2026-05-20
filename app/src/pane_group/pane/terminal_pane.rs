@@ -2147,6 +2147,7 @@ fn launch_remote_child(
         initial_snapshot_token: None,
         agent_identity_uid: None,
         snapshot_disabled: should_disable_snapshot(ctx).then_some(true),
+        skip_initial_turn: None,
     };
 
     new_terminal_view.update(ctx, |terminal_view, ctx| {

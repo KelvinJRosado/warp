@@ -722,6 +722,13 @@ impl AmbientAgentViewModel {
             None => (None, Default::default()),
         };
 
+        // The cloud agent must skip the initial LLM turn iff there is no
+        // user content for it to act on — neither a (substituted) wire prompt
+        // nor a snapshot rehydration system message. Otherwise the LLM would
+        // hallucinate a response against an empty user message.
+        let skip_initial_turn =
+            (wire_prompt.is_none() && initial_snapshot_token.is_none()).then_some(true);
+
         SpawnAgentRequest {
             prompt: wire_prompt,
             mode,
@@ -738,6 +745,7 @@ impl AmbientAgentViewModel {
             initial_snapshot_token,
             agent_identity_uid: None,
             snapshot_disabled: should_disable_snapshot(ctx).then_some(true),
+            skip_initial_turn,
         }
     }
 
@@ -1236,6 +1244,7 @@ impl AmbientAgentViewModel {
             conversation_id: None,
             initial_snapshot_token: None,
             snapshot_disabled: should_disable_snapshot(ctx).then_some(true),
+            skip_initial_turn: None,
         };
 
         self.spawn_internal(request, ctx);
