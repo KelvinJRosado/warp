@@ -451,6 +451,8 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::OzHandoff,
         #[cfg(feature = "handoff_local_cloud")]
         FeatureFlag::HandoffLocalCloud,
+        #[cfg(feature = "empty_prompt_handoff")]
+        FeatureFlag::EmptyPromptHandoff,
         #[cfg(feature = "hoa_notifications")]
         FeatureFlag::HOANotifications,
         #[cfg(feature = "open_code_notifications")]

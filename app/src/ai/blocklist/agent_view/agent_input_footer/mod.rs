@@ -2535,10 +2535,30 @@ impl TypedActionView for AgentInputFooter {
                 });
             }
             AgentInputFooterAction::OpenHandoffPane => {
-                if FeatureFlag::OzHandoff.is_enabled()
+                if !(FeatureFlag::OzHandoff.is_enabled()
                     && FeatureFlag::HandoffLocalCloud.is_enabled()
-                    && cfg!(all(feature = "local_fs", not(target_family = "wasm")))
+                    && cfg!(all(feature = "local_fs", not(target_family = "wasm"))))
                 {
+                    // Nothing to do without the local-to-cloud feature stack.
+                } else if FeatureFlag::EmptyPromptHandoff.is_enabled() {
+                    // With `EmptyPromptHandoff`, the chip dispatches the workspace
+                    // action directly and skips `&` compose mode entirely. The
+                    // workspace classifies the source conversation and runs the
+                    // empty-prompt handoff (continue / snapshot rehydration /
+                    // fresh cloud launch).
+                    #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+                    {
+                        ctx.dispatch_typed_action_deferred(
+                            WorkspaceAction::OpenLocalToCloudHandoffPane {
+                                launch: None,
+                                environment_id: None,
+                                entry_point:
+                                    crate::ai::ambient_agents::telemetry::HandoffEntryPoint::FooterChip,
+                            },
+                        );
+                    }
+                } else {
+                    // Legacy: activate `&` compose mode in the source input.
                     ctx.emit(AgentInputFooterEvent::OpenHandoffPane);
                 }
             }

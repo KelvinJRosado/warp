@@ -738,6 +738,7 @@ struct LocalToCloudHandoffOpenParams {
     launch: Option<PendingCloudLaunch>,
     environment_id: Option<SyncId>,
     intent: LocalToCloudHandoffIntent,
+    source_conversation_in_progress: bool,
 }
 
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
@@ -13582,6 +13583,7 @@ impl Workspace {
         }
         Self::show_handoff_success_toast(ctx);
 
+        // Fresh-launch handoff has no source conversation, so source is never in-progress.
         let pending = PendingHandoff {
             forked_conversation_id: None,
             title: None,
@@ -13589,6 +13591,8 @@ impl Workspace {
             snapshot_upload: SnapshotUploadStatus::Pending,
             submission_state: HandoffSubmissionState::Idle,
             auto_submit: launch,
+            source_conversation_in_progress: false,
+            submitted_with_empty_prompt: false,
         };
         model_handle.update(ctx, |model, model_ctx| {
             model.set_pending_handoff(Some(pending), model_ctx);
@@ -13622,6 +13626,25 @@ impl Workspace {
         entry_point: HandoffEntryPoint,
         ctx: &mut ViewContext<Self>,
     ) {
+        // Footer chip, `&` Enter, and `/handoff` (no arg) all dispatch with
+        // `launch: None` to skip compose mode when `EmptyPromptHandoff` is on.
+        // Synthesize an empty `PendingCloudLaunch` so the rest of the handoff
+        // flow auto-submits without an explicit prompt;
+        // `build_handoff_spawn_request` decides whether to inject
+        // `continue in the cloud` or send `prompt: None` on the wire.
+        let launch = match (launch, entry_point) {
+            (
+                None,
+                HandoffEntryPoint::FooterChip
+                | HandoffEntryPoint::Ampersand
+                | HandoffEntryPoint::SlashCommand,
+            ) if FeatureFlag::EmptyPromptHandoff.is_enabled() => Some(PendingCloudLaunch {
+                prompt: String::new(),
+                attachments: crate::ai::blocklist::handoff::HandoffLaunchAttachments::default(),
+            }),
+            (launch, _) => launch,
+        };
+
         let Some(source_view) = self
             .active_tab_pane_group()
             .as_ref(ctx)
@@ -13739,10 +13762,28 @@ impl Workspace {
 
         let has_existing_conversation = source_conversation.as_ref().is_some_and(|c| !c.is_empty());
 
+        // Compute telemetry fields before the fresh-launch branch consumes
+        // `launch`. Source-in-progress is derived from the unfiltered
+        // `source_conversation` so the telemetry path captures the same
+        // signal that drives the wire-level substitution below.
+        let empty_prompt = launch.as_ref().is_none_or(|l| l.prompt.is_empty());
+        let telemetry_source_in_progress = source_conversation
+            .as_ref()
+            .is_some_and(|c| c.status().is_in_progress() || c.status().is_blocked());
+        let injection_path = if !empty_prompt {
+            crate::ai::ambient_agents::telemetry::HandoffInjectionPath::None
+        } else if telemetry_source_in_progress {
+            crate::ai::ambient_agents::telemetry::HandoffInjectionPath::Continue
+        } else {
+            crate::ai::ambient_agents::telemetry::HandoffInjectionPath::SnapshotRehydrationOnly
+        };
+
         send_telemetry_from_ctx!(
             CloudAgentTelemetryEvent::HandoffInitiated {
                 entry_point: intent.entry_point(),
                 forked_existing_conversation: has_existing_conversation,
+                empty_prompt,
+                injection_path,
             },
             ctx
         );
@@ -13768,9 +13809,13 @@ impl Workspace {
             return;
         }
 
-        if source_conversation.status().is_in_progress()
-            || source_conversation.status().is_blocked()
-        {
+        // Capture the source-conversation status before any in-progress cancellation
+        // below mutates it. Drives the empty-prompt `continue in the cloud` substitution
+        // in the destination cloud pane.
+        let source_conversation_in_progress = source_conversation.status().is_in_progress()
+            || source_conversation.status().is_blocked();
+
+        if source_conversation_in_progress {
             let has_long_running_command =
                 source_view.as_ref(ctx).has_active_long_running_command();
 
@@ -13852,6 +13897,7 @@ impl Workspace {
                             launch,
                             environment_id,
                             intent,
+                            source_conversation_in_progress,
                         },
                         ctx,
                     );
@@ -13888,6 +13934,7 @@ impl Workspace {
     /// Finishes the handoff after the fork RPC returns by restoring the forked
     /// conversation in a cloud pane and starting snapshot prep.
     #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+    #[allow(clippy::too_many_arguments)]
     fn complete_local_to_cloud_handoff_open(
         &mut self,
         source_view: ViewHandle<TerminalView>,
@@ -13900,6 +13947,7 @@ impl Workspace {
             launch,
             environment_id,
             intent,
+            source_conversation_in_progress,
         } = params;
         let show_user_feedback = intent.shows_user_feedback();
         let history_model = BlocklistAIHistoryModel::handle(ctx);
@@ -14007,6 +14055,8 @@ impl Workspace {
             snapshot_upload: SnapshotUploadStatus::Pending,
             submission_state: HandoffSubmissionState::Idle,
             auto_submit: launch,
+            source_conversation_in_progress,
+            submitted_with_empty_prompt: false,
         };
         model_handle.update(ctx, |model, model_ctx| {
             model.set_pending_handoff(Some(pending), model_ctx);

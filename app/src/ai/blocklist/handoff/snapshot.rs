@@ -10,10 +10,12 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use remote_server::proto::UploadHandoffSnapshotResponse;
+use warp_core::send_telemetry_from_ctx;
 use warp_util::standardized_path::StandardizedPath;
 use warpui::{ModelHandle, SingletonEntity, ViewContext};
 
 use crate::ai::agent_sdk::driver::upload_snapshot_for_handoff;
+use crate::ai::ambient_agents::telemetry::CloudAgentTelemetryEvent;
 use crate::ai::blocklist::handoff::touched_repos::{derive_touched_workspace, TouchedWorkspace};
 use crate::remote_server::manager::RemoteServerManager;
 use crate::server::server_api::ai::{AIClient, InitialSnapshotToken};
@@ -134,6 +136,15 @@ pub(crate) fn spawn_handoff_snapshot_upload(
     ctx.spawn(
         upload_handoff_snapshot(paths, target),
         move |_workspace, (derived_workspace, upload_result), ctx| {
+            // Report snapshot content presence so analytics can join with the
+            // earlier `HandoffInitiated.injection_path` to learn whether the
+            // `SnapshotRehydrationOnly` branch actually carried content.
+            let had_snapshot = !derived_workspace.repos.is_empty()
+                || !derived_workspace.orphan_files.is_empty();
+            send_telemetry_from_ctx!(
+                CloudAgentTelemetryEvent::HandoffSnapshotPrepared { had_snapshot },
+                ctx
+            );
             model_handle.update(ctx, |model, model_ctx| {
                 if !model.is_local_to_cloud_handoff() {
                     return;

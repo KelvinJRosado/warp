@@ -4022,7 +4022,12 @@ impl Input {
         }
 
         let prompt = self.editor.as_ref(ctx).buffer_text(ctx).trim().to_owned();
-        if prompt.is_empty() {
+        // With `EmptyPromptHandoff` off, `&` Enter on an empty buffer remains a
+        // no-op (we swallow the Enter so the input keeps the compose draft).
+        // With the flag on, an empty buffer is a valid empty-prompt handoff:
+        // fall through and build a `PendingCloudLaunch` with an empty prompt;
+        // `build_handoff_spawn_request` decides what to send on the wire.
+        if prompt.is_empty() && !FeatureFlag::EmptyPromptHandoff.is_enabled() {
             return true;
         }
 

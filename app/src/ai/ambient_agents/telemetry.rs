@@ -35,6 +35,25 @@ pub enum HandoffEntryPoint {
     Automatic,
 }
 
+/// Describes which synthetic-input path drives an empty-prompt handoff.
+/// Captured at handoff initiation so telemetry reflects the intended path
+/// regardless of whether the snapshot derivation later produces content.
+#[derive(Clone, Copy, Debug, Default, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum HandoffInjectionPath {
+    /// The handoff carried a non-empty user prompt; no client-side injection.
+    #[default]
+    None,
+    /// Empty prompt + in-progress source. The client substituted
+    /// `"continue in the cloud"` on the wire so the cloud agent picks up
+    /// where the local agent left off.
+    Continue,
+    /// Empty prompt + idle source. The cloud agent relies on the server's
+    /// snapshot-rehydration system message (when a snapshot exists) and
+    /// otherwise starts from the forked conversation history alone.
+    SnapshotRehydrationOnly,
+}
+
 /// Telemetry events for client interactions with cloud agents.
 #[derive(Debug, EnumDiscriminants)]
 #[strum_discriminants(derive(EnumIter))]
@@ -92,6 +111,24 @@ pub enum CloudAgentTelemetryEvent {
         entry_point: HandoffEntryPoint,
         /// Whether the handoff forked an existing conversation.
         forked_existing_conversation: bool,
+        /// Whether the user submitted with an empty prompt buffer.
+        empty_prompt: bool,
+        /// Which synthetic-input path drives this submission (relevant only
+        /// when `empty_prompt` is true; always `None` otherwise). Captured at
+        /// handoff initiation, before snapshot derivation has settled — the
+        /// `HandoffSnapshotPrepared` event reports the actual snapshot result.
+        injection_path: HandoffInjectionPath,
+    },
+    /// The async snapshot-upload pipeline that backs a handoff has settled.
+    /// Fires once per handoff after `derive_touched_workspace` completes.
+    /// Pair with `HandoffInitiated` on the same run to learn whether the
+    /// `SnapshotRehydrationOnly` injection actually had snapshot content.
+    #[cfg_attr(target_family = "wasm", allow(dead_code))]
+    HandoffSnapshotPrepared {
+        /// True when the derived `TouchedWorkspace` had at least one repo or
+        /// orphan file (i.e. the cloud agent will receive a non-empty snapshot
+        /// rehydration system message). False when the workspace was empty.
+        had_snapshot: bool,
     },
 }
 
@@ -135,9 +172,16 @@ impl TelemetryEvent for CloudAgentTelemetryEvent {
             CloudAgentTelemetryEvent::HandoffInitiated {
                 entry_point,
                 forked_existing_conversation,
+                empty_prompt,
+                injection_path,
             } => Some(json!({
                 "entry_point": entry_point,
                 "forked_existing_conversation": forked_existing_conversation,
+                "empty_prompt": empty_prompt,
+                "injection_path": injection_path,
+            })),
+            CloudAgentTelemetryEvent::HandoffSnapshotPrepared { had_snapshot } => Some(json!({
+                "had_snapshot": had_snapshot,
             })),
         }
     }
@@ -181,6 +225,7 @@ impl TelemetryEventDesc for CloudAgentTelemetryEventDiscriminants {
             }
             Self::DispatchFailed => "AmbientAgent.DispatchFailed",
             Self::HandoffInitiated => "AmbientAgent.Handoff.Initiated",
+            Self::HandoffSnapshotPrepared => "AmbientAgent.Handoff.SnapshotPrepared",
         }
     }
 
@@ -203,6 +248,9 @@ impl TelemetryEventDesc for CloudAgentTelemetryEventDiscriminants {
             }
             Self::DispatchFailed => "Ambient agent failed to dispatch or encountered an error",
             Self::HandoffInitiated => "User initiated a local-to-cloud handoff",
+            Self::HandoffSnapshotPrepared => {
+                "Handoff snapshot upload settled; reports whether it carried content"
+            }
         }
     }
 

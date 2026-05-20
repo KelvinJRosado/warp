@@ -24,6 +24,16 @@ fn pending_launch() -> PendingCloudLaunch {
     }
 }
 
+/// Empty-prompt launch fixture for empty-prompt handoff tests. Mirrors what
+/// the workspace synthesizes when the chip / `&` / `/handoff` is dispatched
+/// with `launch: None` and `EmptyPromptHandoff` is on.
+fn empty_pending_launch() -> PendingCloudLaunch {
+    PendingCloudLaunch {
+        prompt: String::new(),
+        attachments: HandoffLaunchAttachments::default(),
+    }
+}
+
 fn pending_handoff() -> PendingHandoff {
     PendingHandoff {
         forked_conversation_id: Some("forked-conversation".to_owned()),
@@ -32,6 +42,8 @@ fn pending_handoff() -> PendingHandoff {
         snapshot_upload: SnapshotUploadStatus::Pending,
         submission_state: HandoffSubmissionState::Idle,
         auto_submit: Some(pending_launch()),
+        source_conversation_in_progress: false,
+        submitted_with_empty_prompt: false,
     }
 }
 
@@ -43,6 +55,32 @@ fn pending_handoff_fresh_launch() -> PendingHandoff {
         snapshot_upload: SnapshotUploadStatus::Pending,
         submission_state: HandoffSubmissionState::Idle,
         auto_submit: Some(pending_launch()),
+        source_conversation_in_progress: false,
+        submitted_with_empty_prompt: false,
+    }
+}
+
+/// Variant of `pending_handoff` for empty-prompt handoff tests. Lets the caller
+/// set the source-conversation state and substitute an empty-prompt launch.
+fn pending_handoff_empty(source_in_progress: bool) -> PendingHandoff {
+    PendingHandoff {
+        forked_conversation_id: Some("forked-conversation".to_owned()),
+        title: None,
+        touched_workspace: None,
+        snapshot_upload: SnapshotUploadStatus::Pending,
+        submission_state: HandoffSubmissionState::Idle,
+        auto_submit: Some(empty_pending_launch()),
+        source_conversation_in_progress: source_in_progress,
+        submitted_with_empty_prompt: false,
+    }
+}
+
+/// Builds a non-empty `TouchedWorkspace` so the snapshot-rehydration indicator
+/// branch can fire in `empty_prompt_handoff_indicator`.
+fn touched_workspace_with_orphan_file() -> TouchedWorkspace {
+    TouchedWorkspace {
+        repos: vec![],
+        orphan_files: vec![std::path::PathBuf::from("/tmp/handoff-fixture.txt")],
     }
 }
 
@@ -389,6 +427,211 @@ fn snapshot_failure_is_treated_as_settled_for_auto_submit() {
                 .expect("Failed snapshot should be treated as settled");
             assert_eq!(launch.prompt, "fix tests");
             assert!(model.maybe_auto_submit_handoff(ctx).is_none());
+        });
+    });
+}
+
+#[test]
+fn empty_prompt_auto_submit_with_in_progress_source_injects_continue_in_the_cloud() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let model = add_model(&mut app);
+
+        model.update(&mut app, |model, ctx| {
+            model.set_pending_handoff(
+                Some(pending_handoff_empty(/*source_in_progress*/ true)),
+                ctx,
+            );
+        });
+
+        let queued = model.update(&mut app, |model, ctx| model.queue_handoff_auto_submit(ctx));
+        assert!(
+            queued,
+            "empty-prompt auto-submit should be accepted, not gated"
+        );
+
+        model.read(&app, |model, _| {
+            let request = model.request().expect("request should be populated");
+            assert_eq!(
+                request.prompt.as_deref(),
+                Some("continue in the cloud"),
+                "in-progress source + empty prompt must substitute the wire prompt",
+            );
+            let handoff = model
+                .pending_handoff
+                .as_ref()
+                .expect("handoff should remain");
+            assert!(
+                handoff.submitted_with_empty_prompt,
+                "submitted_with_empty_prompt must be stamped on the pending handoff",
+            );
+        });
+    });
+}
+
+#[test]
+fn empty_prompt_auto_submit_with_idle_source_sends_none_on_the_wire() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let model = add_model(&mut app);
+
+        model.update(&mut app, |model, ctx| {
+            model.set_pending_handoff(
+                Some(pending_handoff_empty(/*source_in_progress*/ false)),
+                ctx,
+            );
+            // Stage a non-empty touched workspace so the indicator could pick
+            // `SnapshotRehydrationOnly` once the submit completes — but it
+            // must not influence the wire substitution decision.
+            model.set_pending_handoff_workspace(touched_workspace_with_orphan_file(), ctx);
+        });
+
+        let queued = model.update(&mut app, |model, ctx| model.queue_handoff_auto_submit(ctx));
+        assert!(queued);
+
+        model.read(&app, |model, _| {
+            let request = model.request().expect("request should be populated");
+            assert!(
+                request.prompt.is_none(),
+                "idle source + empty prompt must send prompt: None (got {:?})",
+                request.prompt
+            );
+            let handoff = model
+                .pending_handoff
+                .as_ref()
+                .expect("handoff should remain");
+            assert!(handoff.submitted_with_empty_prompt);
+        });
+    });
+}
+
+#[test]
+fn empty_prompt_indicator_returns_continue_for_in_progress_source() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let _guard = FeatureFlag::EmptyPromptHandoff.override_enabled(true);
+        let model = add_model(&mut app);
+
+        model.update(&mut app, |model, ctx| {
+            model.set_pending_handoff(
+                Some(pending_handoff_empty(/*source_in_progress*/ true)),
+                ctx,
+            );
+        });
+
+        let queued = model.update(&mut app, |model, ctx| model.queue_handoff_auto_submit(ctx));
+        assert!(queued);
+
+        model.read(&app, |model, _| {
+            assert_eq!(
+                model.empty_prompt_handoff_indicator(),
+                Some(EmptyPromptHandoffIndicator::Continue),
+            );
+        });
+    });
+}
+
+#[test]
+fn empty_prompt_indicator_returns_snapshot_rehydration_for_idle_source_with_content() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let _guard = FeatureFlag::EmptyPromptHandoff.override_enabled(true);
+        let model = add_model(&mut app);
+
+        model.update(&mut app, |model, ctx| {
+            model.set_pending_handoff(
+                Some(pending_handoff_empty(/*source_in_progress*/ false)),
+                ctx,
+            );
+            model.set_pending_handoff_workspace(touched_workspace_with_orphan_file(), ctx);
+        });
+
+        let queued = model.update(&mut app, |model, ctx| model.queue_handoff_auto_submit(ctx));
+        assert!(queued);
+
+        model.read(&app, |model, _| {
+            assert_eq!(
+                model.empty_prompt_handoff_indicator(),
+                Some(EmptyPromptHandoffIndicator::SnapshotRehydrationOnly),
+            );
+        });
+    });
+}
+
+#[test]
+fn empty_prompt_indicator_returns_none_for_idle_source_with_empty_snapshot() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let _guard = FeatureFlag::EmptyPromptHandoff.override_enabled(true);
+        let model = add_model(&mut app);
+
+        model.update(&mut app, |model, ctx| {
+            model.set_pending_handoff(
+                Some(pending_handoff_empty(/*source_in_progress*/ false)),
+                ctx,
+            );
+            model.set_pending_handoff_workspace(TouchedWorkspace::default(), ctx);
+        });
+
+        let queued = model.update(&mut app, |model, ctx| model.queue_handoff_auto_submit(ctx));
+        assert!(queued);
+
+        model.read(&app, |model, _| {
+            assert!(
+                model.empty_prompt_handoff_indicator().is_none(),
+                "idle + empty snapshot must yield no indicator block",
+            );
+        });
+    });
+}
+
+#[test]
+fn empty_prompt_indicator_returns_none_when_flag_disabled() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let _guard = FeatureFlag::EmptyPromptHandoff.override_enabled(false);
+        let model = add_model(&mut app);
+
+        model.update(&mut app, |model, ctx| {
+            model.set_pending_handoff(
+                Some(pending_handoff_empty(/*source_in_progress*/ true)),
+                ctx,
+            );
+        });
+
+        let queued = model.update(&mut app, |model, ctx| model.queue_handoff_auto_submit(ctx));
+        assert!(queued);
+
+        model.read(&app, |model, _| {
+            assert!(
+                model.empty_prompt_handoff_indicator().is_none(),
+                "indicator must short-circuit to None when the feature flag is off",
+            );
+        });
+    });
+}
+
+#[test]
+fn empty_prompt_indicator_returns_none_when_submitted_with_nonempty_prompt() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let _guard = FeatureFlag::EmptyPromptHandoff.override_enabled(true);
+        let model = add_model(&mut app);
+
+        // Non-empty `pending_handoff` ("fix tests") so `queue_handoff_auto_submit`
+        // sets `submitted_with_empty_prompt = false`.
+        model.update(&mut app, |model, ctx| {
+            model.set_pending_handoff(Some(pending_handoff()), ctx);
+        });
+
+        let queued = model.update(&mut app, |model, ctx| model.queue_handoff_auto_submit(ctx));
+        assert!(queued);
+
+        model.read(&app, |model, _| {
+            assert!(
+                model.empty_prompt_handoff_indicator().is_none(),
+                "non-empty prompt submit must not surface the empty-prompt indicator",
+            );
         });
     });
 }

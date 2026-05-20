@@ -857,6 +857,12 @@ pub enum FeatureFlag {
     /// conversation into a fresh cloud agent run with the current workspace
     /// snapshot attached. Requires `OzHandoff` to also be enabled.
     HandoffLocalCloud,
+    /// Enables empty-prompt local-to-cloud handoff: the footer chip auto-submits
+    /// without entering `&` compose mode, `&` Enter on an empty buffer launches
+    /// a handoff, and an in-progress source conversation gets a client-side
+    /// `continue in the cloud` substitution on the wire. Requires `OzHandoff`
+    /// and `HandoffLocalCloud` to also be enabled.
+    EmptyPromptHandoff,
 
     /// Enables creating API keys scoped to named agents in the API key
     /// management UI. When enabled the "Team" option in the key-type
@@ -940,6 +946,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::SshRemoteServer,
     FeatureFlag::DragTabsToWindows,
     FeatureFlag::RemoteCodebaseIndexing,
+    FeatureFlag::EmptyPromptHandoff,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).

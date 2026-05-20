@@ -922,9 +922,21 @@ impl Input {
                             entry_point: HandoffEntryPoint::SlashCommand,
                         },
                     );
+                } else if FeatureFlag::EmptyPromptHandoff.is_enabled() {
+                    // `/handoff` with no argument and `EmptyPromptHandoff` on:
+                    // dispatch directly like the footer chip. The workspace
+                    // synthesizes an empty `PendingCloudLaunch` and runs the
+                    // empty-prompt handoff (continue / snapshot rehydration /
+                    // fresh cloud launch).
+                    ctx.dispatch_typed_action_deferred(
+                        WorkspaceAction::OpenLocalToCloudHandoffPane {
+                            launch: None,
+                            environment_id: None,
+                            entry_point: HandoffEntryPoint::SlashCommand,
+                        },
+                    );
                 } else {
-                    // `/handoff` with no query enters `&` compose mode,
-                    // same as the footer chip.
+                    // Legacy: `/handoff` with no query enters `&` compose mode.
                     self.activate_cloud_handoff_compose(HandoffEntryPoint::SlashCommand, ctx);
                 }
             }

@@ -18,7 +18,10 @@ use super::loading_screen::{
     render_cloud_mode_cancelled_screen, render_cloud_mode_error_screen,
     render_cloud_mode_github_auth_required_screen, render_cloud_mode_loading_screen,
 };
-use super::{AmbientAgentEntryBlock, AmbientAgentViewModel, AmbientAgentViewModelEvent};
+use super::{
+    AmbientAgentEntryBlock, AmbientAgentViewModel, AmbientAgentViewModelEvent,
+    EmptyPromptHandoffIndicator,
+};
 use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
 use crate::ai::agent::display_user_query_with_mode;
 #[cfg(not(target_family = "wasm"))]
@@ -152,21 +155,39 @@ impl TerminalView {
                 }
                 if FeatureFlag::CloudModeSetupV2.is_enabled() {
                     // Render the submitted cloud prompt via the queued-prompt UI while the
-                    // real shared-session transcript catches up. `request.prompt` is stored
-                    // stripped of any `/plan` / `/orchestrate` prefix; rebuild the display
-                    // form from `request.mode` so the user sees exactly what they typed.
-                    let prompt = ambient_agent_view_model
+                    // real shared-session transcript catches up. For empty-prompt handoff,
+                    // surface a context-aware label instead of the literal wire prompt so
+                    // the substituted `"continue in the cloud"` text never appears to the
+                    // user.
+                    let indicator = ambient_agent_view_model
                         .as_ref(ctx)
-                        .request()
-                        .and_then(|request| {
-                            request
-                                .prompt
-                                .as_deref()
-                                .map(|prompt| display_user_query_with_mode(request.mode, prompt))
-                        })
-                        .unwrap_or_default();
-                    if !prompt.is_empty() {
-                        self.insert_cloud_mode_queued_user_query_block(prompt, ctx);
+                        .empty_prompt_handoff_indicator();
+                    if let Some(indicator) = indicator {
+                        let label = match indicator {
+                            EmptyPromptHandoffIndicator::Continue => {
+                                "Continuing previous task in the cloud"
+                            }
+                            EmptyPromptHandoffIndicator::SnapshotRehydrationOnly => {
+                                "Applying workspace changes…"
+                            }
+                        };
+                        self.insert_cloud_mode_queued_user_query_block(label.to_owned(), ctx);
+                    } else {
+                        // `request.prompt` is stored stripped of any `/plan` /
+                        // `/orchestrate` prefix; rebuild the display form from
+                        // `request.mode` so the user sees exactly what they typed.
+                        let prompt = ambient_agent_view_model
+                            .as_ref(ctx)
+                            .request()
+                            .and_then(|request| {
+                                request.prompt.as_deref().map(|prompt| {
+                                    display_user_query_with_mode(request.mode, prompt)
+                                })
+                            })
+                            .unwrap_or_default();
+                        if !prompt.is_empty() {
+                            self.insert_cloud_mode_queued_user_query_block(prompt, ctx);
+                        }
                     }
                 } else {
                     // Reset tip cooldown so the first tip shows for 60 seconds
