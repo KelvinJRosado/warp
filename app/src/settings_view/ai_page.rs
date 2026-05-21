@@ -374,7 +374,6 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
             &(context.clone() & id!(flags::IS_ACTIVE_AI_ENABLED)),
             flags::GIT_OPERATIONS_AUTOGEN_FLAG,
         )
-        .with_group(bindings::BindingGroup::WarpAi)
         .with_enabled(|| FeatureFlag::GitOperationsInCodeReview.is_enabled())
         .is_supported_on_current_platform(
             AISettings::as_ref(app)
