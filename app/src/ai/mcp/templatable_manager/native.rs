@@ -3,6 +3,7 @@ use crate::ai::mcp::templatable_manager::oauth::{
     load_credentials_from_secure_storage, write_to_secure_storage, FILE_BASED_MCP_CREDENTIALS_KEY,
     TEMPLATABLE_MCP_CREDENTIALS_KEY,
 };
+// Import inline because of circular dependencies
 use crate::ai::mcp::CloudMCPServer;
 use crate::ai::mcp::FileBasedMCPManager;
 use core::fmt;

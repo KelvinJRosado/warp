@@ -19,22 +19,36 @@ pub struct CloudObjectUpsertParams<M> {
 
 /// A generic implementation of cloud objects that can be used for any model and id types.
 ///
-/// Cloud objects can use `GenericCloudObject<K, M>`.
-/// `K` is their id type, and `M` is their model type.
+/// For instance, rather than directly implementing the CloudObject trait, CloudObjects can
+/// implement GenericCloudObject<K, M> where K is their id type and M is their model type.
+///
+/// For example, CloudNotebook becomes:
+///
+///   pub type CloudNotebook = GenericCloudObject<NotebookId, CloudNotebookModel>
+///
+/// The advantage of using the generic model is you get common implementations
+/// of CloudObject methods like ```versions``` for free.
+///
+/// See the comments for CloudObject to understand the relationship between
+/// this trait, CloudObject and CloudModelType.  They are tightly coupled.
 #[derive(Clone, Debug)]
 pub struct GenericCloudObject<K, M> {
     pub id: SyncId,
     pub metadata: CloudObjectMetadata,
     pub permissions: CloudObjectPermissions,
     /// Tracks whether this object has a conflict with the server version.
-    /// This is runtime state and is not persisted.
+    /// This is runtime state (not persisted) - conflicts are always NoConflicts when loaded from SQLite.
     pub conflict_status: ConflictStatus<GenericServerObject<K, M>>,
 
-    // The model is private so callers cannot hold mutable references outside this struct.
+    // Intentionally not public to prevent users of this class from holding
+    // onto references to the model outside of this struct.
     //
-    // The Arc supports cheap clones and clone-on-write model replacement.
+    // This is an Arc in order to support clone-on-write semantics for the model.
+    // By wrapping the model in an Arc, clones become cheap, and we can avoid
+    // doing deep clones of the model whenever the containing object is cloned.
     //
-    // Callers should use set_model to replace the model atomically.
+    // Callers who want to update the model need to call set_model to update the
+    // entire model atomically.
     model: Arc<M>,
 }
 
@@ -119,7 +133,7 @@ impl<K, M> GenericCloudObject<K, M> {
         }
     }
 
-    /// Creates a new `GenericCloudObject` from a `GenericServerObject`.
+    /// Creates a new `GenericCloudObject` from a `ServerObject`.
     pub fn new_from_server(server_object: GenericServerObject<K, M>) -> Self {
         Self {
             id: server_object.id,
@@ -135,13 +149,15 @@ impl<K, M> GenericCloudObject<K, M> {
         self.conflict_status = ConflictStatus::ConflictingChanges { object };
     }
 
-    /// Updates this object with a server response, recording a conflict if local content changed.
     pub fn update_from_server_object(&mut self, server_object: GenericServerObject<K, M>) {
+        // Check if we should create a conflict or apply the update.
         if self.metadata.has_pending_content_changes() || self.conflict_status.has_conflicts() {
+            // There are pending changes, so this creates a conflict.
             self.conflict_status = ConflictStatus::ConflictingChanges {
                 object: Arc::new(server_object),
             };
         } else {
+            // No pending changes, apply the server update.
             self.metadata
                 .update_revision_from_server(&server_object.metadata);
             self.model = server_object.model.into();
