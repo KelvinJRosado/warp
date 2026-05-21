@@ -2760,6 +2760,19 @@ impl AgentDriver {
                             );
                         }
 
+                        // Emit AmbientSetupPhaseEnded as the canonical "setup phase complete"
+                        // signal so viewers can tear down the Cloud Mode Setup V2 chip and clear
+                        // the pre-first-exchange gate off this marker rather than racing against
+                        // the first AppendedExchange. The legacy AppendedExchange-driven teardowns
+                        // in app/src/terminal/view.rs and
+                        // app/src/terminal/view/ambient_agent/block/setup_command_text.rs are
+                        // kept as a transition fallback for old sharers; both paths are
+                        // idempotent on the viewer side.
+                        terminal
+                            .model
+                            .lock()
+                            .send_ambient_setup_phase_ended_for_shared_session();
+
                         terminal.ai_controller().update(ctx, |controller, ctx| {
                             controller.send_ai_input_with_context(
                                 |context| AIAgentInput::StartFromAmbientRunPrompt {
