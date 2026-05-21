@@ -198,6 +198,18 @@ impl<T: Send + 'static> IdleTimeoutSender<T> {
             self.generation.fetch_add(1, Ordering::SeqCst);
         }
     }
+
+    /// End the run with `value`, deferring by `idle_on_complete` when set so the
+    /// driver stays alive long enough to accept a follow-up. Use for "graceful"
+    /// terminal statuses (Success / Blocked / Cancelled). Falls back to
+    /// immediate completion when `idle_on_complete` is `None`.
+    fn complete_with_optional_idle(&self, idle_on_complete: Option<Duration>, value: T) {
+        if let Some(idle_timeout) = idle_on_complete {
+            self.end_run_after(idle_timeout, value);
+        } else {
+            self.end_run_now(value);
+        }
+    }
 }
 
 /// How to resume an existing conversation when starting an agent run.
@@ -2349,21 +2361,30 @@ impl AgentDriver {
     ) -> Receiver<SDKConversationOutputStatus> {
         // Create a oneshot channel to signal task completion.
         let (tx, rx) = oneshot::channel();
+        let run_exit = IdleTimeoutSender::new(tx);
 
         // Empty-prompt local-to-cloud handoff: the sandboxed Oz CLI is invoked
         // with `--skip-initial-turn` because there is no user content to act on
         // (no prompt, no "continue in the cloud" substitution, no snapshot
         // rehydration). Skip the `StartFromAmbientRunPrompt` dispatch entirely
         // so the LLM does not hallucinate a turn against an empty user message.
-        // The user's first follow-up via `submit_run_followup` will drive the
-        // first real turn. We still enter the agent view so the pane is ready
-        // for that follow-up, and immediately resolve the status receiver to
-        // `Success` so the driver loop in `AgentDriver::run` does not hang.
-        if let AgentRunPrompt::ServerSide {
-            skip_initial_turn: true,
-            ..
-        } = &task_prompt
-        {
+        // The user's first follow-up arrives via the session sharing protocol
+        // as an in-process `AppendedExchange` on the existing conversation; the
+        // history subscription below cancels the idle timer scheduled here
+        // exactly as it would for any other follow-up turn. We schedule the
+        // deferred `Success` *before* setting up the subscription so the
+        // subscription closure can take ownership of `run_exit`; the shared
+        // `Arc<AtomicUsize>` generation counter inside `IdleTimeoutSender`
+        // means `cancel_idle_timeout` issued from inside the closure correctly
+        // invalidates the timer scheduled here.
+        let is_skip_initial_turn = matches!(
+            &task_prompt,
+            AgentRunPrompt::ServerSide {
+                skip_initial_turn: true,
+                ..
+            },
+        );
+        if is_skip_initial_turn {
             let restored_conversation_id = self.restored_conversation_id;
             self.terminal_driver.update(ctx, |td, ctx| {
                 td.with_terminal_view(ctx, |terminal, ctx| {
@@ -2385,11 +2406,11 @@ impl AgentDriver {
                         .send_ambient_setup_phase_ended_for_shared_session();
                 })
             });
-            let _ = tx.send(SDKConversationOutputStatus::Success);
-            return rx;
+            run_exit.complete_with_optional_idle(
+                self.idle_on_complete,
+                SDKConversationOutputStatus::Success,
+            );
         }
-
-        let run_exit = IdleTimeoutSender::new(tx);
 
         // Subscribe before the conversation starts.
         let history_model_handle = BlocklistAIHistoryModel::handle(ctx);
@@ -2594,11 +2615,10 @@ impl AgentDriver {
                             | SDKConversationOutputStatus::Cancelled { .. } => {
                                 // Whether to keep the process alive after completion is controlled by
                                 // the `warp agent run --idle-on-complete[=<DURATION>]` flag.
-                                if let Some(idle_timeout) = me.idle_on_complete {
-                                    run_exit.end_run_after(idle_timeout, output_status);
-                                } else {
-                                    run_exit.end_run_now(output_status);
-                                }
+                                run_exit.complete_with_optional_idle(
+                                    me.idle_on_complete,
+                                    output_status,
+                                );
                             }
                             // For errors, check if we expect an automatic retry.
                             SDKConversationOutputStatus::Error { ref error } => {
@@ -2694,63 +2714,67 @@ impl AgentDriver {
             .context("Failed to write artifact_created"));
         });
 
-        // Submit the AI query.
-        // If we restored a conversation from --conversation, use that conversation ID
-        // so the prompt is sent as a follow-up to the restored conversation.
-        let restored_conversation_id = self.restored_conversation_id;
-        self.terminal_driver.update(ctx, |td, ctx| {
-            td.with_terminal_view(ctx, |terminal, ctx| match task_prompt {
-                AgentRunPrompt::Local(prompt_str) => {
-                    if FeatureFlag::AgentView.is_enabled() {
-                        terminal.enter_agent_view(
-                            Some(prompt_str),
-                            restored_conversation_id,
-                            AgentViewEntryOrigin::Cli,
-                            ctx,
-                        );
-                    } else {
-                        terminal.set_ai_input_mode_with_query(Some(&prompt_str), ctx);
-                        terminal
-                            .input()
-                            .update(ctx, |input, ctx| input.input_enter(ctx));
+        // Submit the AI query for the non-skip paths. The skip path above
+        // already entered the view, emitted the marker, and scheduled the
+        // deferred `Success`; the history subscription will cancel that idle
+        // timer on the first follow-up `AppendedExchange`.
+        if !is_skip_initial_turn {
+            // If we restored a conversation from --conversation, use that conversation ID
+            // so the prompt is sent as a follow-up to the restored conversation.
+            let restored_conversation_id = self.restored_conversation_id;
+            self.terminal_driver.update(ctx, |td, ctx| {
+                td.with_terminal_view(ctx, |terminal, ctx| match task_prompt {
+                    AgentRunPrompt::Local(prompt_str) => {
+                        if FeatureFlag::AgentView.is_enabled() {
+                            terminal.enter_agent_view(
+                                Some(prompt_str),
+                                restored_conversation_id,
+                                AgentViewEntryOrigin::Cli,
+                                ctx,
+                            );
+                        } else {
+                            terminal.set_ai_input_mode_with_query(Some(&prompt_str), ctx);
+                            terminal
+                                .input()
+                                .update(ctx, |input, ctx| input.input_enter(ctx));
+                        }
                     }
-                }
-                AgentRunPrompt::ServerSide {
-                    skill,
-                    attachments_dir,
-                    // The `skip_initial_turn: true` case short-circuited above
-                    // before this match. Any value reaching here is `false`.
-                    skip_initial_turn: _,
-                } => {
-                    let Some(task_id) = self.task_id else {
-                        log::error!("ServerSide prompt without task_id");
-                        return;
-                    };
-                    let ambient_run_id = task_id.to_string();
+                    AgentRunPrompt::ServerSide {
+                        skill,
+                        attachments_dir,
+                        // The `skip_initial_turn: true` case was handled above.
+                        skip_initial_turn: _,
+                    } => {
+                        let Some(task_id) = self.task_id else {
+                            log::error!("ServerSide prompt without task_id");
+                            return;
+                        };
+                        let ambient_run_id = task_id.to_string();
 
-                    if FeatureFlag::AgentView.is_enabled() {
-                        terminal.enter_agent_view(
-                            None,
-                            restored_conversation_id,
-                            AgentViewEntryOrigin::Cli,
-                            ctx,
-                        );
+                        if FeatureFlag::AgentView.is_enabled() {
+                            terminal.enter_agent_view(
+                                None,
+                                restored_conversation_id,
+                                AgentViewEntryOrigin::Cli,
+                                ctx,
+                            );
+                        }
+
+                        terminal.ai_controller().update(ctx, |controller, ctx| {
+                            controller.send_ai_input_with_context(
+                                |context| AIAgentInput::StartFromAmbientRunPrompt {
+                                    ambient_run_id: ambient_run_id.clone(),
+                                    context,
+                                    runtime_skill: skill.clone(),
+                                    attachments_dir: attachments_dir.clone(),
+                                },
+                                ctx,
+                            );
+                        });
                     }
-
-                    terminal.ai_controller().update(ctx, |controller, ctx| {
-                        controller.send_ai_input_with_context(
-                            |context| AIAgentInput::StartFromAmbientRunPrompt {
-                                ambient_run_id: ambient_run_id.clone(),
-                                context,
-                                runtime_skill: skill.clone(),
-                                attachments_dir: attachments_dir.clone(),
-                            },
-                            ctx,
-                        );
-                    });
-                }
-            })
-        });
+                })
+            });
+        }
 
         rx
     }
@@ -2827,11 +2851,7 @@ impl AgentDriver {
                     // Drive idle-on-complete timer for the harness exit signal.
                     match status {
                         CLIAgentSessionStatus::Success | CLIAgentSessionStatus::Blocked { .. } => {
-                            if let Some(idle_timeout) = me.idle_on_complete {
-                                harness_exit.end_run_after(idle_timeout, ());
-                            } else {
-                                harness_exit.end_run_now(());
-                            }
+                            harness_exit.complete_with_optional_idle(me.idle_on_complete, ());
                         }
                         CLIAgentSessionStatus::InProgress => {
                             harness_exit.cancel_idle_timeout();
