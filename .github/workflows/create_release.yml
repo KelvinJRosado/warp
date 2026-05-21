@@ -1756,7 +1756,6 @@ jobs:
             --release-tag "$RELEASE_TAG" \
             --markdown-artifact-url "$MARKDOWN_ARTIFACT_URL" \
             --output "$SLACK_PAYLOAD"
-
           if ! jq -e '.blocks | length > 0' "$SLACK_PAYLOAD" >/dev/null; then
             echo "has_content=" >> $GITHUB_OUTPUT
             exit 0
@@ -1821,10 +1820,27 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Write representative raw Markdown changelog artifact
+        shell: bash
+        run: |
+          cat > "${{ runner.temp }}/changelog-draft.md" <<'MARKDOWN'
+          # Changelog draft preview
+
+          * Representative raw Markdown changelog artifact for workflow validation.
+          MARKDOWN
+      - name: Upload representative raw Markdown changelog artifact
+        id: upload_validation_markdown_artifact
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: changelog-draft-markdown-validation
+          path: ${{ runner.temp }}/changelog-draft.md
+          if-no-files-found: error
 
       - name: Build representative Slack changelog payload
         id: build_slack_changelog_payload
         shell: bash
+        env:
+          MARKDOWN_ARTIFACT_URL: ${{ steps.upload_validation_markdown_artifact.outputs.artifact-url }}
         run: |
           CHANGELOG_INPUT="${{ runner.temp }}/slack-changelog-input.json"
           SLACK_PAYLOAD="${{ runner.temp }}/slack-changelog-payload.json"
@@ -1848,15 +1864,15 @@ jobs:
           python3 .agents/skills/changelog-draft/scripts/build_slack_payload.py \
             --input "$CHANGELOG_INPUT" \
             --release-tag "FORMAT PREVIEW — not a release" \
-            --markdown-artifact-url "https://github.com/warpdotdev/warp/actions/runs/123/artifacts/456" \
+            --markdown-artifact-url "$MARKDOWN_ARTIFACT_URL" \
             --output "$SLACK_PAYLOAD"
 
-          jq -e '
+          jq -e --arg markdown_artifact_url "$MARKDOWN_ARTIFACT_URL" '
             (.blocks | length) == 3 and
             .blocks[0].type == "header" and
             .blocks[0].text.text == "Changelog for FORMAT PREVIEW — not a release" and
             .blocks[1].type == "section" and
-            (.blocks[1].text.text | contains("<https://github.com/warpdotdev/warp/actions/runs/123/artifacts/456|Download raw Markdown changelog artifact>")) and
+            (.blocks[1].text.text | contains("<\($markdown_artifact_url)|Download raw Markdown changelog artifact>")) and
             .blocks[2].type == "section" and
             .blocks[2].expand == true and
             (.blocks[2].text.text | contains("<https://github.com/warpdotdev/warp/pull/9275|#9275>")) and
