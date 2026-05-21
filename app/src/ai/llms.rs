@@ -818,7 +818,6 @@ impl LLMPreferences {
         let config_key = LLMId::from(config_key);
         self.custom_llm_info_for_id(&config_key)
             .map(|info| info.display_name.as_str())
-            .filter(|display_name| !display_name.contains('~'))
             .map(str::to_string)
             .unwrap_or_else(|| CUSTOM_ENDPOINT_USAGE_FALLBACK_LABEL.to_string())
     }

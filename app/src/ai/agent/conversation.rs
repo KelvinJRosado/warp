@@ -115,7 +115,7 @@ fn footer_model_token_usage(
     for (config_key, usage) in &usage_metadata.custom_endpoint_token_usage {
         let label = custom_endpoint_display_label(config_key);
         let entry = token_usage
-            .entry(format!("custom_endpoint~{config_key}"))
+            .entry(config_key.clone())
             .or_insert_with(|| ModelTokenUsage {
                 model_id: label,
                 custom_endpoint_config_key: Some(config_key.clone()),

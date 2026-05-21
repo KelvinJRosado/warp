@@ -213,7 +213,7 @@ fn custom_endpoint_usage_display_label_resolves_alias_name_and_generic_fallback(
             vec![
                 model("raw-alias", Some("Alias"), "uuid-alias"),
                 model("raw-name", None, "uuid-name"),
-                model("raw~name", None, "uuid-delimited-name"),
+                model("raw~name", None, "uuid-tilde-name"),
             ],
         )],
         ..Default::default()
@@ -234,8 +234,8 @@ fn custom_endpoint_usage_display_label_resolves_alias_name_and_generic_fallback(
         "raw-name"
     );
     assert_eq!(
-        preferences.custom_endpoint_usage_display_label("uuid-delimited-name"),
-        CUSTOM_ENDPOINT_USAGE_FALLBACK_LABEL
+        preferences.custom_endpoint_usage_display_label("uuid-tilde-name"),
+        "raw~name"
     );
     assert_eq!(
         preferences.custom_endpoint_usage_display_label("unknown"),
