@@ -113,7 +113,6 @@ fn retry_request(prompt: impl Into<String>) -> SpawnAgentRequest {
             serde_json::from_str("\"snapshot-token-123\"").expect("snapshot token should parse"),
         ),
         snapshot_disabled: Some(true),
-        skip_initial_turn: None,
     }
 }
 
@@ -608,119 +607,6 @@ fn empty_prompt_indicator_returns_none_when_flag_disabled() {
                 model.empty_prompt_handoff_indicator().is_none(),
                 "indicator must short-circuit to None when the feature flag is off",
             );
-        });
-    });
-}
-
-#[test]
-fn build_handoff_spawn_request_sets_skip_initial_turn_when_no_content() {
-    App::test((), |mut app| async move {
-        initialize_app_for_terminal_view(&mut app);
-        let model = add_model(&mut app);
-
-        model.update(&mut app, |model, ctx| {
-            model.set_pending_handoff(
-                Some(pending_handoff_empty(/*source_in_progress*/ false)),
-                ctx,
-            );
-            model.set_pending_handoff_workspace(TouchedWorkspace::default(), ctx);
-            model.set_pending_handoff_snapshot_upload(
-                SnapshotUploadStatus::SkippedEmptyWorkspace,
-                ctx,
-            );
-        });
-
-        let queued = model.update(&mut app, |model, ctx| model.queue_handoff_auto_submit(ctx));
-        assert!(queued);
-        let launch = model.update(&mut app, |model, ctx| model.maybe_auto_submit_handoff(ctx));
-        assert!(
-            launch.is_some(),
-            "workspace and snapshot have settled; maybe_auto_submit_handoff must consume the launch"
-        );
-
-        model.read(&app, |model, _| {
-            let request = model.request().expect("request should be populated");
-            assert_eq!(
-                request.skip_initial_turn,
-                Some(true),
-                "empty prompt + no substitution + no snapshot token must set skip_initial_turn",
-            );
-            assert!(
-                request.prompt.is_none(),
-                "wire prompt must be None (got {:?})",
-                request.prompt,
-            );
-        });
-    });
-}
-
-#[test]
-fn build_handoff_spawn_request_does_not_set_skip_initial_turn_with_continue_substitution() {
-    App::test((), |mut app| async move {
-        initialize_app_for_terminal_view(&mut app);
-        let model = add_model(&mut app);
-
-        model.update(&mut app, |model, ctx| {
-            model.set_pending_handoff(
-                Some(pending_handoff_empty(/*source_in_progress*/ true)),
-                ctx,
-            );
-            model.set_pending_handoff_workspace(TouchedWorkspace::default(), ctx);
-            model.set_pending_handoff_snapshot_upload(
-                SnapshotUploadStatus::SkippedEmptyWorkspace,
-                ctx,
-            );
-        });
-
-        let queued = model.update(&mut app, |model, ctx| model.queue_handoff_auto_submit(ctx));
-        assert!(queued);
-
-        model.read(&app, |model, _| {
-            let request = model.request().expect("request should be populated");
-            assert!(
-                request.skip_initial_turn.is_none(),
-                "`continue in the cloud` substitution must suppress skip_initial_turn (got {:?})",
-                request.skip_initial_turn,
-            );
-            assert_eq!(
-                request.prompt.as_deref(),
-                Some("continue in the cloud"),
-                "in-progress source must substitute the wire prompt",
-            );
-        });
-    });
-}
-
-#[test]
-fn build_handoff_spawn_request_does_not_set_skip_initial_turn_with_snapshot() {
-    App::test((), |mut app| async move {
-        initialize_app_for_terminal_view(&mut app);
-        let model = add_model(&mut app);
-
-        let token: InitialSnapshotToken =
-            serde_json::from_str("\"snapshot-token-abc\"").expect("snapshot token should parse");
-
-        model.update(&mut app, |model, ctx| {
-            model.set_pending_handoff(
-                Some(pending_handoff_empty(/*source_in_progress*/ false)),
-                ctx,
-            );
-
-            let request = model.build_handoff_spawn_request(
-                None,
-                vec![],
-                Some("forked-conversation".to_owned()),
-                Some(token),
-                ctx,
-            );
-
-            assert!(
-                request.skip_initial_turn.is_none(),
-                "snapshot rehydration must suppress skip_initial_turn (got {:?})",
-                request.skip_initial_turn,
-            );
-            assert!(request.prompt.is_none());
-            assert!(request.initial_snapshot_token.is_some());
         });
     });
 }

@@ -254,6 +254,13 @@ pub struct AgentDriverOptions {
     pub snapshot_upload_timeout: Option<Duration>,
     /// Declarations script timeout override.
     pub snapshot_script_timeout: Option<Duration>,
+    /// When true, the AgentDriver skips dispatching the initial
+    /// `StartFromAmbientRunPrompt` so the cloud agent comes up ready for a
+    /// user follow-up instead of hallucinating a turn against an empty user
+    /// message. Populated from the `--skip-initial-turn` CLI flag, which the
+    /// worker emits per-execution based on the execution input (empty prompt
+    /// + no snapshot token). The CLI flag is the worker→driver contract.
+    pub skip_initial_turn: bool,
 }
 
 /// `AgentDriver` is a model for driving an ambient Warp agent to completion.
@@ -324,6 +331,12 @@ pub struct AgentDriver {
     /// has a cloud task id, and `--no-snapshot` was not set; `None` keeps the observer a
     /// pure no-op for local and disabled runs.
     snapshot_file_writer: Option<snapshot::DeclarationsWriterHandle>,
+
+    /// Whether the driver should skip dispatching the initial
+    /// `StartFromAmbientRunPrompt`. Mirror of `AgentDriverOptions::skip_initial_turn`,
+    /// sourced from the `--skip-initial-turn` CLI flag. Read by `execute_run`
+    /// to gate the empty-prompt short-circuit path.
+    skip_initial_turn: bool,
 }
 
 pub(crate) enum SDKConversationOutputStatus {
@@ -383,11 +396,6 @@ pub enum AgentRunPrompt {
         skill: Option<ParsedSkill>,
         /// Directory where task attachments were downloaded.
         attachments_dir: Option<String>,
-        /// When true, the cloud agent skips the initial LLM turn. Used by the
-        /// empty-prompt local-to-cloud handoff path where there is no user
-        /// content to act on; the user's first follow-up drives the first
-        /// real turn instead.
-        skip_initial_turn: bool,
     },
 }
 
@@ -542,6 +550,7 @@ impl AgentDriver {
             snapshot_disabled,
             snapshot_upload_timeout,
             snapshot_script_timeout,
+            skip_initial_turn,
         } = options;
 
         // Split the unified resume option into the two internal slots that the rest of
@@ -668,6 +677,7 @@ impl AgentDriver {
             parent_run_id: parent_run_id_for_self,
             third_party_harness_model_config,
             snapshot_file_writer,
+            skip_initial_turn,
         })
     }
 
@@ -707,6 +717,7 @@ impl AgentDriver {
             parent_run_id: None,
             third_party_harness_model_config: None,
             snapshot_file_writer: None,
+            skip_initial_turn: false,
         }
     }
 
@@ -2054,9 +2065,6 @@ impl AgentDriver {
             AgentRunPrompt::ServerSide {
                 skill,
                 attachments_dir,
-                // `skip_initial_turn` only suppresses the Oz harness's initial dispatch;
-                // third-party harnesses always resolve the server-side prompt.
-                skip_initial_turn: _,
             } => {
                 let skill = skill
                     .as_ref()
@@ -2366,24 +2374,22 @@ impl AgentDriver {
         // Empty-prompt local-to-cloud handoff: the sandboxed Oz CLI is invoked
         // with `--skip-initial-turn` because there is no user content to act on
         // (no prompt, no "continue in the cloud" substitution, no snapshot
-        // rehydration). Skip the `StartFromAmbientRunPrompt` dispatch entirely
-        // so the LLM does not hallucinate a turn against an empty user message.
-        // The user's first follow-up arrives via the session sharing protocol
-        // as an in-process `AppendedExchange` on the existing conversation; the
-        // history subscription below cancels the idle timer scheduled here
-        // exactly as it would for any other follow-up turn. We schedule the
-        // deferred `Success` *before* setting up the subscription so the
-        // subscription closure can take ownership of `run_exit`; the shared
+        // rehydration). The worker derives this per-execution from the
+        // execution input and emits `--skip-initial-turn`; the driver reads it
+        // off CLI args at construction and stores it on `self`. Skip the
+        // `StartFromAmbientRunPrompt` dispatch entirely so the LLM does not
+        // hallucinate a turn against an empty user message. The user's first
+        // follow-up arrives via the session sharing protocol as an in-process
+        // `AppendedExchange` on the existing conversation; the history
+        // subscription below cancels the idle timer scheduled here exactly as
+        // it would for any other follow-up turn. We schedule the deferred
+        // `Success` *before* setting up the subscription so the subscription
+        // closure can take ownership of `run_exit`; the shared
         // `Arc<AtomicUsize>` generation counter inside `IdleTimeoutSender`
         // means `cancel_idle_timeout` issued from inside the closure correctly
         // invalidates the timer scheduled here.
-        let is_skip_initial_turn = matches!(
-            &task_prompt,
-            AgentRunPrompt::ServerSide {
-                skip_initial_turn: true,
-                ..
-            },
-        );
+        let is_skip_initial_turn =
+            self.skip_initial_turn && matches!(&task_prompt, AgentRunPrompt::ServerSide { .. });
         if is_skip_initial_turn {
             let restored_conversation_id = self.restored_conversation_id;
             self.terminal_driver.update(ctx, |td, ctx| {
@@ -2742,8 +2748,6 @@ impl AgentDriver {
                     AgentRunPrompt::ServerSide {
                         skill,
                         attachments_dir,
-                        // The `skip_initial_turn: true` case was handled above.
-                        skip_initial_turn: _,
                     } => {
                         let Some(task_id) = self.task_id else {
                             log::error!("ServerSide prompt without task_id");

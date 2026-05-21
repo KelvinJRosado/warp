@@ -288,7 +288,6 @@ fn serializes_mcp_servers_as_object_not_string() {
         conversation_id: None,
         initial_snapshot_token: None,
         snapshot_disabled: None,
-        skip_initial_turn: None,
     };
 
     let value = serde_json::to_value(&request).unwrap();

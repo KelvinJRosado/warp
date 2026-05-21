@@ -493,7 +493,6 @@ impl AmbientAgentRunner {
                 conversation_id: args.conversation,
                 initial_snapshot_token: None,
                 snapshot_disabled: None,
-                skip_initial_turn: None,
             };
 
             let should_open = args.open;

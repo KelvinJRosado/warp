@@ -246,14 +246,6 @@ pub struct SpawnAgentRequest {
     /// Set by the client when cloud conversation storage is disabled.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub snapshot_disabled: Option<bool>,
-    /// When `Some(true)`, the sandboxed Oz CLI skips the initial LLM turn for
-    /// this run. Set by the client on empty-prompt local-to-cloud handoffs
-    /// where there is no user content (and no snapshot rehydration to lean on)
-    /// for the cloud agent to act on. The cloud agent comes up ready for the
-    /// user's follow-up instead of hallucinating a response against an empty
-    /// user message.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub skip_initial_turn: Option<bool>,
 }
 
 /// Server-minted token returned by `POST /agent/handoff/upload-snapshot` that scopes a batch
