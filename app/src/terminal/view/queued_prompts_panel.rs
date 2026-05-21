@@ -9,22 +9,26 @@ use std::collections::HashMap;
 
 use pathfinder_color::ColorU;
 use pathfinder_geometry::rect::RectF;
+use pathfinder_geometry::vector::vec2f;
 use warp_core::features::FeatureFlag;
+use warp_core::ui::theme::color::internal_colors;
 use warpui::elements::new_scrollable::{NewScrollable, ScrollableAppearance, SingleAxisConfig};
 use warpui::elements::{
-    Border, ChildView, Clipped, ClippedScrollStateHandle, ConstrainedBox, Container, CornerRadius,
-    CrossAxisAlignment, DragAxis, Draggable, DraggableState, Empty, Expanded, Fill, Flex,
-    Hoverable, MinSize, MouseStateHandle, ParentElement, Radius, SavePosition, ScrollbarWidth,
-    Text, DEFAULT_UI_LINE_HEIGHT_RATIO,
+    Border, ChildAnchor, ChildView, Clipped, ClippedScrollStateHandle, ConstrainedBox, Container,
+    CornerRadius, CrossAxisAlignment, DragAxis, Draggable, DraggableState, Empty, Expanded, Fill,
+    Flex, Hoverable, MinSize, MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement,
+    ParentOffsetBounds, Radius, SavePosition, ScrollbarWidth, Stack, Text,
+    DEFAULT_UI_LINE_HEIGHT_RATIO,
 };
 use warpui::fonts::{Properties, Style, Weight};
 use warpui::platform::Cursor;
+use warpui::ui_components::components::UiComponent;
 use warpui::{
     AppContext, BlurContext, Element, Entity, EntityId, FocusContext, ModelHandle, SingletonEntity,
     TypedActionView, View, ViewContext, ViewHandle,
 };
 
-use crate::ai::blocklist::{QueuedQueryEvent, QueuedQueryId, QueuedQueryModel};
+use crate::ai::blocklist::{QueuedQueryEvent, QueuedQueryId, QueuedQueryModel, QueuedQueryOrigin};
 use crate::appearance::Appearance;
 use crate::editor::{
     EditorOptions, EditorView, Event as EditorEvent, PropagateAndNoOpEscapeKey,
@@ -37,6 +41,9 @@ use crate::util::truncation::truncate_from_end;
 use crate::view_components::action_button::{ActionButton, ButtonSize, NakedTheme};
 
 const MAX_PROMPT_LINES: f32 = 5.;
+const INITIAL_CLOUD_MODE_DRAG_TOOLTIP: &str =
+    "The first cloud-mode prompt is fixed because the cloud agent processes it first.";
+const INITIAL_CLOUD_MODE_ACTION_TOOLTIP: &str = "The first cloud-mode prompt cannot be edited or deleted because the cloud agent has already accepted it.";
 
 /// Returns the position-cache id used to look up a row's bounding rect during a drag.
 /// Indexed by the row's current visual index so swaps maintain stable lookups.
@@ -46,12 +53,24 @@ fn queue_row_position_id(panel_view_id: EntityId, index: usize) -> String {
 
 fn build_row_state(
     query_id: QueuedQueryId,
+    origin: QueuedQueryOrigin,
     ctx: &mut ViewContext<QueuedPromptsPanelView>,
 ) -> QueuedPromptRowState {
+    let is_initial_cloud_mode = origin == QueuedQueryOrigin::InitialCloudMode;
+    let edit_tooltip = if is_initial_cloud_mode {
+        INITIAL_CLOUD_MODE_ACTION_TOOLTIP
+    } else {
+        "Edit queued prompt"
+    };
+    let delete_tooltip = if is_initial_cloud_mode {
+        INITIAL_CLOUD_MODE_ACTION_TOOLTIP
+    } else {
+        "Delete queued prompt"
+    };
     let edit_button = ctx.add_typed_action_view(move |_| {
         ActionButton::new("", NakedTheme)
             .with_icon(TerminalIcon::Pencil)
-            .with_tooltip("Edit queued prompt")
+            .with_tooltip(edit_tooltip)
             .with_size(ButtonSize::XSmall)
             .on_click(move |ctx| {
                 ctx.dispatch_typed_action(QueuedPromptsPanelAction::StartEditingRow(query_id));
@@ -60,15 +79,20 @@ fn build_row_state(
     let delete_button = ctx.add_typed_action_view(move |_| {
         ActionButton::new("", NakedTheme)
             .with_icon(TerminalIcon::Trash)
-            .with_tooltip("Delete queued prompt")
+            .with_tooltip(delete_tooltip)
             .with_size(ButtonSize::XSmall)
             .on_click(move |ctx| {
                 ctx.dispatch_typed_action(QueuedPromptsPanelAction::DeleteRow(query_id));
             })
     });
+    if is_initial_cloud_mode {
+        edit_button.update(ctx, |button, ctx| button.set_disabled(true, ctx));
+        delete_button.update(ctx, |button, ctx| button.set_disabled(true, ctx));
+    }
 
     QueuedPromptRowState {
         mouse_state: MouseStateHandle::default(),
+        drag_handle_tooltip_state: MouseStateHandle::default(),
         edit_button,
         delete_button,
         draggable_state: DraggableState::default(),
@@ -78,6 +102,7 @@ fn build_row_state(
 #[derive(Clone)]
 struct QueuedPromptRowState {
     mouse_state: MouseStateHandle,
+    drag_handle_tooltip_state: MouseStateHandle,
     edit_button: ViewHandle<ActionButton>,
     delete_button: ViewHandle<ActionButton>,
     draggable_state: DraggableState,
@@ -200,9 +225,17 @@ impl QueuedPromptsPanelView {
                 self.collapsed = false;
             }
             QueuedQueryEvent::Appended { query_id } => {
+                let origin = self
+                    .queued_query_model
+                    .as_ref(ctx)
+                    .queue()
+                    .iter()
+                    .find(|row| row.id() == *query_id)
+                    .map(|row| row.origin())
+                    .expect("appended queued query should remain available");
                 self.row_states
                     .entry(*query_id)
-                    .or_insert_with(|| build_row_state(*query_id, ctx));
+                    .or_insert_with(|| build_row_state(*query_id, origin, ctx));
             }
             QueuedQueryEvent::Reordered | QueuedQueryEvent::QueueNextPromptToggled => {}
         }
@@ -448,6 +481,7 @@ impl View for QueuedPromptsPanelView {
                     panel_view_id,
                     index,
                     text: query.text().to_owned(),
+                    origin: query.origin(),
                     is_in_edit_mode,
                     is_being_dragged,
                     edit_editor: &self.edit_editor,
@@ -586,6 +620,7 @@ struct RenderRowProps<'a> {
     panel_view_id: EntityId,
     index: usize,
     text: String,
+    origin: QueuedQueryOrigin,
     is_in_edit_mode: bool,
     is_being_dragged: bool,
     edit_editor: &'a ViewHandle<EditorView>,
@@ -601,6 +636,7 @@ fn render_row(props: RenderRowProps<'_>) -> Box<dyn Element> {
         panel_view_id,
         index,
         text,
+        origin,
         is_in_edit_mode,
         is_being_dragged,
         edit_editor,
@@ -624,6 +660,7 @@ fn render_row(props: RenderRowProps<'_>) -> Box<dyn Element> {
 
     let QueuedPromptRowState {
         mouse_state,
+        drag_handle_tooltip_state,
         edit_button,
         delete_button,
         draggable_state,
@@ -670,14 +707,46 @@ fn render_row(props: RenderRowProps<'_>) -> Box<dyn Element> {
             .finish()
         };
 
-        let drag_handle: Box<dyn Element> = ConstrainedBox::new(
-            TerminalIcon::DragIndicator
-                .to_warpui_icon(dimmed_color.into())
-                .finish(),
-        )
-        .with_height(24.)
-        .with_width(24.)
-        .finish();
+        let drag_handle: Box<dyn Element> = if origin == QueuedQueryOrigin::InitialCloudMode {
+            let ui_builder = appearance.ui_builder().clone();
+            let disabled_color = internal_colors::text_disabled(theme, theme.surface_1());
+            Hoverable::new(drag_handle_tooltip_state.clone(), move |drag_state| {
+                let icon = ConstrainedBox::new(
+                    TerminalIcon::DragIndicator
+                        .to_warpui_icon(disabled_color.into())
+                        .finish(),
+                )
+                .with_height(24.)
+                .with_width(24.)
+                .finish();
+                let mut stack = Stack::new().with_child(icon);
+                if drag_state.is_hovered() {
+                    stack.add_positioned_overlay_child(
+                        ui_builder
+                            .tool_tip(INITIAL_CLOUD_MODE_DRAG_TOOLTIP.to_owned())
+                            .build()
+                            .finish(),
+                        OffsetPositioning::offset_from_parent(
+                            vec2f(0., -4.),
+                            ParentOffsetBounds::WindowByPosition,
+                            ParentAnchor::TopLeft,
+                            ChildAnchor::BottomLeft,
+                        ),
+                    );
+                }
+                stack.finish()
+            })
+            .finish()
+        } else {
+            ConstrainedBox::new(
+                TerminalIcon::DragIndicator
+                    .to_warpui_icon(dimmed_color.into())
+                    .finish(),
+            )
+            .with_height(24.)
+            .with_width(24.)
+            .finish()
+        };
 
         let mut row = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
@@ -712,7 +781,7 @@ fn render_row(props: RenderRowProps<'_>) -> Box<dyn Element> {
 
     let position_id = queue_row_position_id(panel_view_id, index);
 
-    if is_in_edit_mode {
+    if is_in_edit_mode || origin == QueuedQueryOrigin::InitialCloudMode {
         return SavePosition::new(row_inner, &position_id).finish();
     }
 

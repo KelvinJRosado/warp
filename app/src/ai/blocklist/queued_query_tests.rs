@@ -34,12 +34,83 @@ fn user_query(text: &str) -> QueuedQuery {
     QueuedQuery::new(text.to_owned(), QueuedQueryOrigin::QueueSlashCommand)
 }
 
+fn initial_cloud_mode_query(text: &str) -> QueuedQuery {
+    QueuedQuery::new(text.to_owned(), QueuedQueryOrigin::InitialCloudMode)
+}
+
 fn append_user(
     model: &warpui::ModelHandle<QueuedQueryModel>,
     app: &mut App,
     text: &str,
 ) -> QueuedQueryId {
     model.update(app, |model, ctx| model.append(user_query(text), ctx))
+}
+
+#[test]
+fn initial_cloud_mode_head_rejects_user_mutations_and_autofire() {
+    with_model(|mut app, model, _events| {
+        let initial_id = model.update(&mut app, |model, ctx| {
+            model.append(initial_cloud_mode_query("initial"), ctx)
+        });
+        let followup_id = append_user(&model, &mut app, "follow up");
+
+        let removed = model.update(&mut app, |model, ctx| model.remove_by_id(initial_id, ctx));
+        assert!(removed.is_none());
+
+        model.update(&mut app, |model, ctx| {
+            model.enter_edit_mode(initial_id, ctx);
+            model.reorder(initial_id, 1, ctx);
+            model.reorder(followup_id, 0, ctx);
+        });
+
+        let action = model.update(&mut app, |model, ctx| model.pop_for_autofire(None, ctx));
+        assert!(action.is_none());
+
+        model.read(&app, |model, _| {
+            let queue = model.queue();
+            assert_eq!(queue.len(), 2);
+            assert_eq!(queue[0].id(), initial_id);
+            assert_eq!(queue[0].origin(), QueuedQueryOrigin::InitialCloudMode);
+            assert_eq!(queue[1].id(), followup_id);
+            assert_eq!(model.editing_row(), None);
+        });
+    });
+}
+
+#[test]
+fn remove_initial_cloud_mode_row_only_removes_the_locked_head() {
+    with_model(|mut app, model, events| {
+        let initial_id = model.update(&mut app, |model, ctx| {
+            model.append(initial_cloud_mode_query("initial"), ctx)
+        });
+        append_user(&model, &mut app, "follow up");
+        events.borrow_mut().clear();
+
+        let removed = model.update(&mut app, |model, ctx| {
+            model.remove_initial_cloud_mode_row(ctx)
+        });
+        assert_eq!(
+            removed.map(|query| query.text().to_owned()),
+            Some("initial".to_owned())
+        );
+
+        let removed_again = model.update(&mut app, |model, ctx| {
+            model.remove_initial_cloud_mode_row(ctx)
+        });
+        assert!(removed_again.is_none());
+
+        let action = model.update(&mut app, |model, ctx| model.pop_for_autofire(None, ctx));
+        match action {
+            Some(AutofireAction::Submit { text }) => assert_eq!(text, "follow up"),
+            other => panic!("expected Submit, got {other:?}"),
+        }
+
+        let evts = events.borrow();
+        assert!(matches!(
+            evts.first(),
+            Some(QueuedQueryEvent::Removed { query_id }) if *query_id == initial_id
+        ));
+    });
 }
 
 #[test]

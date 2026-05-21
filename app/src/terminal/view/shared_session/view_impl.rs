@@ -1746,15 +1746,13 @@ impl TerminalView {
             }
         });
         let tombstone_view_id = tombstone_view_handle.id();
-        self.insert_rich_content(
-            None,
-            tombstone_view_handle,
-            None,
-            RichContentInsertionPosition::Append {
+        let insertion_position = self
+            .pending_user_query_view_id
+            .map(RichContentInsertionPosition::AfterRichContent)
+            .unwrap_or(RichContentInsertionPosition::Append {
                 insert_below_long_running_block: true,
-            },
-            ctx,
-        );
+            });
+        self.insert_rich_content(None, tombstone_view_handle, None, insertion_position, ctx);
         self.conversation_ended_tombstone_view_id = Some(tombstone_view_id);
     }
 

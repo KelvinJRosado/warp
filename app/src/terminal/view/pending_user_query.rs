@@ -101,6 +101,19 @@ impl TerminalView {
         );
     }
 
+    pub(in crate::terminal::view) fn remove_cloud_mode_queue_row(
+        &mut self,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if !FeatureFlag::QueuedPromptsV2.is_enabled() {
+            return;
+        }
+
+        self.queued_query_model.update(ctx, |model, ctx| {
+            model.remove_initial_cloud_mode_row(ctx);
+        });
+    }
+
     /// Removes the pending user query block, if one exists. No-op if none is present.
     /// Also cancels the queued prompt callback so the prompt is not sent.
     /// (Safe to call from within the callback itself — the caller `.take()`s it first.)

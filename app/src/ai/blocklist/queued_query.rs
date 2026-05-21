@@ -13,7 +13,6 @@ impl QueuedQueryId {
 }
 
 /// Where a queued prompt came from.
-/// The origin is informational for telemetry; FIFO ordering and firing semantics are uniform.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QueuedQueryOrigin {
     /// Filed while the initial Cloud Mode prompt waits to be handed off.
@@ -168,6 +167,9 @@ impl QueuedQueryModel {
     /// is restored to the input box).
     pub fn pop_for_autofire(&mut self, ctx: &mut ModelContext<Self>) -> Option<AutofireAction> {
         let first = self.queue.first()?;
+        if first.origin == QueuedQueryOrigin::InitialCloudMode {
+            return None;
+        }
         let first_in_edit_mode = self.editing == Some(first.id);
         let popped = self.queue.remove(0);
         if first_in_edit_mode {
@@ -191,12 +193,56 @@ impl QueuedQueryModel {
         ctx: &mut ModelContext<Self>,
     ) -> Option<QueuedQuery> {
         let idx = self.queue.iter().position(|q| q.id == query_id)?;
+        if self.queue[idx].origin == QueuedQueryOrigin::InitialCloudMode {
+            return None;
+        }
         let removed = self.queue.remove(idx);
         if self.editing == Some(query_id) {
             self.editing = None;
         }
         ctx.emit(QueuedQueryEvent::Removed { query_id });
         Some(removed)
+    }
+
+    /// Removes the locked initial Cloud Mode row, if it is still at the queue head.
+    pub fn remove_initial_cloud_mode_row(
+        &mut self,
+        ctx: &mut ModelContext<Self>,
+    ) -> Option<QueuedQuery> {
+        if !self
+            .queue
+            .first()
+            .is_some_and(|row| row.origin == QueuedQueryOrigin::InitialCloudMode)
+        {
+            return None;
+        }
+        let removed = self.queue.remove(0);
+        if self.editing == Some(removed.id) {
+            self.editing = None;
+        }
+        ctx.emit(QueuedQueryEvent::Removed {
+            query_id: removed.id,
+        });
+        Some(removed)
+    }
+
+    /// Replaces the text of a specific row by id, if present. No-op when `query_id` does not
+    /// exist. Emits `EditCommitted` because subscribers care about the same thing (a row's text
+    /// changed) regardless of whether the trigger was an inline edit or a programmatic update.
+    pub fn replace_text_by_id(
+        &mut self,
+        query_id: QueuedQueryId,
+        new_text: String,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let Some(row) = self.queue.iter_mut().find(|q| q.id == query_id) else {
+            return;
+        };
+        if row.text == new_text {
+            return;
+        }
+        row.text = new_text;
+        ctx.emit(QueuedQueryEvent::EditCommitted { query_id });
     }
 
     /// Moves the row identified by `source_id` to position `target_index` within the queue.
@@ -210,6 +256,15 @@ impl QueuedQueryModel {
         let Some(source_idx) = self.queue.iter().position(|q| q.id == source_id) else {
             return;
         };
+        if self.queue[source_idx].origin == QueuedQueryOrigin::InitialCloudMode
+            || (target_index == 0
+                && self
+                    .queue
+                    .first()
+                    .is_some_and(|row| row.origin == QueuedQueryOrigin::InitialCloudMode))
+        {
+            return;
+        }
         let row = self.queue.remove(source_idx);
         let clamped = target_index.min(self.queue.len());
         self.queue.insert(clamped, row);
@@ -219,8 +274,11 @@ impl QueuedQueryModel {
     /// Enters edit mode for `query_id`. If another row was being edited, that edit is cancelled
     /// (its text is unchanged, per the spec).
     pub fn enter_edit_mode(&mut self, query_id: QueuedQueryId, ctx: &mut ModelContext<Self>) {
-        let row_exists = self.queue.iter().any(|r| r.id == query_id);
-        if !row_exists {
+        let row_is_editable = self
+            .queue
+            .iter()
+            .any(|r| r.id == query_id && r.origin != QueuedQueryOrigin::InitialCloudMode);
+        if !row_is_editable {
             return;
         }
 
