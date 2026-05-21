@@ -109,16 +109,10 @@ fn write_git_credentials_file(credentials: &[GitCredential]) -> Result<()> {
 /// ```
 ///
 /// The write is atomic: a temporary file is written then renamed.
-fn write_gh_hosts_yml(credentials: &[GitCredential]) -> Result<()> {
+fn write_gh_hosts_yml(credentials: &[GitCredential], home: &std::path::Path) -> Result<()> {
     if credentials.is_empty() {
         return Ok(());
     }
-
-    let home = home_dir()?;
-    write_gh_hosts_yml_at_home(credentials, &home)
-}
-
-fn write_gh_hosts_yml_at_home(credentials: &[GitCredential], home: &std::path::Path) -> Result<()> {
     let gh_config_dir = home.join(".config").join("gh");
     std::fs::create_dir_all(&gh_config_dir)
         .with_context(|| format!("Failed to create {}", gh_config_dir.display()))?;
@@ -148,8 +142,12 @@ fn write_gh_hosts_yml_at_home(credentials: &[GitCredential], home: &std::path::P
 }
 
 pub(crate) fn write_git_credentials(credentials: &[GitCredential]) -> Result<()> {
+    if credentials.is_empty() {
+        return Ok(());
+    }
     write_git_credentials_file(credentials)?;
-    write_gh_hosts_yml(credentials)?;
+    let home = home_dir()?;
+    write_gh_hosts_yml(credentials, &home)?;
     Ok(())
 }
 
@@ -170,41 +168,6 @@ fn run_git_config(key: &str, value: &str) {
         Err(e) => {
             log::warn!("Failed to run git config --global {key}: {e}");
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn write_gh_hosts_yml_uses_gh_cli_filename() -> Result<()> {
-        let temp_dir = tempfile::tempdir()?;
-        let gh_config_dir = temp_dir.path().join(".config").join("gh");
-
-        write_gh_hosts_yml_at_home(
-            &[GitCredential {
-                token: "token".to_string(),
-                username: Some("octocat".to_string()),
-                email: Some("octocat@example.com".to_string()),
-                host: "github.com".to_string(),
-            }],
-            temp_dir.path(),
-        )?;
-
-        let hosts_path = gh_config_dir.join(GH_HOSTS_FILENAME);
-        assert!(hosts_path.exists());
-        assert!(!gh_config_dir
-            .join(format!("{GH_HOSTS_FILENAME}.tmp"))
-            .exists());
-
-        let hosts = std::fs::read_to_string(hosts_path)?;
-        assert!(hosts.contains("github.com:"));
-        assert!(hosts.contains("    oauth_token: token"));
-        assert!(hosts.contains("    git_protocol: https"));
-        assert!(hosts.contains("    user: octocat"));
-
-        Ok(())
     }
 }
 
@@ -355,3 +318,7 @@ pub(crate) async fn refresh_loop(task_id: String, ai_client: Arc<dyn AIClient>) 
         }
     }
 }
+
+#[cfg(test)]
+#[path = "git_credentials_tests.rs"]
+mod tests;
