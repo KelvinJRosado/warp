@@ -13,8 +13,8 @@ pub trait Serializer<M>: Debug + Clone + 'static {
         Self: Sized;
 }
 
-/// A `GenericStringModel` is a generic implementation of model types that can serialize to/from
-/// string given a particular serializer.
+/// A `GenericStringModel` is a generic implementation of model types that can serialize to/from string.
+/// given a particular serializer.
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct GenericStringModel<M, S>
 where
