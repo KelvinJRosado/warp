@@ -171,7 +171,7 @@ fn ambient_agent_task(
         created_at: now,
         started_at: Some(now),
         updated_at: now,
-        run_time: Some("1 seconds".to_string()),
+        run_time_seconds: Some(1),
         status_message: None,
         source: None,
         session_id: None,

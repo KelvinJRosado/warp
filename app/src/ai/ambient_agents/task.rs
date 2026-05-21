@@ -282,7 +282,7 @@ pub struct AmbientAgentTask {
     pub started_at: Option<DateTime<Utc>>,
     pub updated_at: DateTime<Utc>,
     #[serde(default)]
-    pub run_time: Option<String>,
+    pub run_time_seconds: Option<i64>,
     pub status_message: Option<TaskStatusMessage>,
     #[serde(default, deserialize_with = "deserialize_ambient_agent_source")]
     pub source: Option<AgentSource>,

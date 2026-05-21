@@ -517,7 +517,7 @@ fn create_cloud_mode_task_for_user(creator_uid: &str) -> AmbientAgentTask {
         created_at: now,
         started_at: Some(now),
         updated_at: now,
-        run_time: Some("1 seconds".to_string()),
+        run_time_seconds: Some(1),
         status_message: None,
         source: Some(AgentSource::CloudMode),
         session_id: None,

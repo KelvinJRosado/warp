@@ -203,7 +203,7 @@ pub struct ConversationDetailsData {
     /// Total credits spent on the conversation/task.
     credits: Option<f32>,
     /// Total duration of the conversation.
-    run_time: Option<String>,
+    formatted_run_time: Option<String>,
     /// Artifacts created during the conversation (plans, PRs, branches).
     artifacts: Vec<Artifact>,
     /// Action to dispatch when "Open" button is clicked.
@@ -279,13 +279,13 @@ impl ConversationDetailsData {
         // Calculate run time from exchanges
         let first_exchange = conversation.first_exchange();
         let last_exchange = conversation.latest_exchange();
-        let mut run_time = None;
+        let mut formatted_run_time = None;
         let mut created_at = None;
         if let (Some(first), Some(last)) = (first_exchange, last_exchange) {
             if let Some(finish_time) = last.finish_time {
                 let duration = finish_time.signed_duration_since(first.start_time);
                 if duration.num_seconds() >= 0 {
-                    run_time = Some(human_readable_precise_duration(duration));
+                    formatted_run_time = Some(human_readable_precise_duration(duration));
                 }
             }
             // Created at from first exchange
@@ -320,7 +320,7 @@ impl ConversationDetailsData {
             executor: None,
             created_at,
             credits: Some(conversation.credits_spent()),
-            run_time,
+            formatted_run_time,
             artifacts: conversation.artifacts().to_vec(),
             open_action: None,
             source_prompt: conversation.initial_query(),
@@ -379,7 +379,9 @@ impl ConversationDetailsData {
             created_at: Some(task.created_at.with_timezone(&Local)),
             artifacts: task.artifacts.clone(),
             credits,
-            run_time: task.run_time.clone(),
+            formatted_run_time: task.run_time_seconds.map(|s| {
+                human_readable_precise_duration(chrono::Duration::seconds(s))
+            }),
             open_action,
             creator: task
                 .creator
@@ -456,8 +458,12 @@ impl ConversationDetailsData {
                 executor,
                 created_at,
                 credits,
-                run_time: task
-                    .and_then(|task| task.run_time.clone())
+                formatted_run_time: task
+                    .and_then(|t| {
+                        t.run_time_seconds.map(|s| {
+                            human_readable_precise_duration(chrono::Duration::seconds(s))
+                        })
+                    })
                     .or_else(|| entry.display.run_time.clone()),
                 artifacts: entry.display.artifacts.clone(),
                 open_action,
@@ -485,7 +491,7 @@ impl ConversationDetailsData {
             executor: None,
             created_at,
             credits: entry.display.request_usage,
-            run_time: None,
+            formatted_run_time: None,
             artifacts: entry.display.artifacts.clone(),
             open_action,
             source_prompt,
@@ -513,7 +519,7 @@ impl ConversationDetailsData {
             executor: None,
             created_at: None,
             credits: None,
-            run_time: None,
+            formatted_run_time: None,
             artifacts: vec![],
             open_action: None,
             source_prompt: None,
@@ -555,7 +561,7 @@ impl ConversationDetailsData {
             executor: None,
             created_at: Some(created_at),
             credits: credits_used,
-            run_time: None,
+            formatted_run_time: None,
             open_action,
             artifacts,
             source_prompt: initial_query,
@@ -1922,7 +1928,7 @@ impl View for ConversationDetailsPanel {
             );
         }
 
-        if let Some(formatted) = &self.data.run_time {
+        if let Some(formatted) = &self.data.formatted_run_time {
             content.add_child(
                 Container::new(self.render_simple_field("Run time", formatted, appearance))
                     .with_margin_bottom(FIELD_SPACING)

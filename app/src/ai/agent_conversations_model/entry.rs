@@ -6,6 +6,7 @@ use crate::ai::artifacts::Artifact;
 use crate::ai::blocklist::history_model::{AIConversationMetadata, BlocklistAIHistoryModel};
 use crate::ai::conversation_navigation::ConversationNavigationData;
 use crate::auth::{AuthStateProvider, UserUid};
+use crate::util::time_format::human_readable_precise_duration;
 use crate::workspace::RestoreConversationLayout;
 use crate::workspaces::user_profiles::UserProfiles;
 use chrono::{DateTime, Utc};
@@ -342,9 +343,8 @@ fn task_session_status(task: &AmbientAgentTask) -> SessionStatus {
 }
 
 fn task_run_time(task: &AmbientAgentTask) -> Option<String> {
-    task.run_time
-        .clone()
-        .or_else(|| Some("Not started".to_string()))
+    task.run_time_seconds
+        .map(|s| human_readable_precise_duration(chrono::Duration::seconds(s)))
 }
 
 fn task_harness(task: &AmbientAgentTask) -> Option<Harness> {

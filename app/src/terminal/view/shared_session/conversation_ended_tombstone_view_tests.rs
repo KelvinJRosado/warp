@@ -22,7 +22,7 @@ fn task_with_run_time_and_credits() -> AmbientAgentTask {
         created_at: started_at,
         started_at: Some(started_at),
         updated_at: started_at,
-        run_time: Some("server run time".to_string()),
+        run_time_seconds: Some(42),
         status_message: None,
         source: None,
         session_id: None,
@@ -50,7 +50,7 @@ fn task_with_run_time_and_credits() -> AmbientAgentTask {
 fn task_without_run_time_or_credits() -> AmbientAgentTask {
     let mut task = task_with_run_time_and_credits();
     task.started_at = None;
-    task.run_time = None;
+    task.run_time_seconds = None;
     task.request_usage = None;
     task
 }
@@ -100,7 +100,7 @@ fn task_overrides_run_time_and_credits_when_present() {
     data.enrich_from_task(task);
 
     let expected_credits = format_credits((INFERENCE_COST + COMPUTE_COST + PLATFORM_COST) as f32);
-    assert_eq!(data.run_time.as_deref(), Some("server run time"));
+    assert_eq!(data.run_time.as_deref(), Some("42.0 sec"));
     assert_eq!(data.credits, Some(expected_credits));
 }
 
@@ -123,7 +123,7 @@ fn empty_defaults_populated_from_task_for_non_oz() {
     data.enrich_from_task(task);
 
     let expected_credits = format_credits((INFERENCE_COST + COMPUTE_COST + PLATFORM_COST) as f32);
-    assert_eq!(data.run_time.as_deref(), Some("server run time"));
+    assert_eq!(data.run_time.as_deref(), Some("42.0 sec"));
     assert_eq!(data.credits, Some(expected_credits));
 }
 
