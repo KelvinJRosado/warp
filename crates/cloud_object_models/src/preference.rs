@@ -16,6 +16,7 @@ pub enum Platform {
     Linux,
     Windows,
     Web,
+    /// This implies the preference applies on all supported platforms
     Global,
 }
 
@@ -56,15 +57,32 @@ impl Platform {
     }
 }
 
-/// Defines the data model for a cloud-synced user preference.
+/// Defines the data model for a cloud synced user preference.
+///
+/// The expected usage is that each storage key is modeled as its own cloud preference object.
+/// This allows users to edit individual cloud preferences with less fear of an offline
+/// collision (e.g. if I change one preference on one machine and then update another while
+/// offline on another machine, modeling them individually allows for both changes to be applied).
+///
+/// Note that I considered adding a concept of "preference group" as a higher level namespace
+/// for preferences (in case users want to create groups of them), but decided to hold off on
+/// this until we actually support that feature.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Preference {
+    /// The storage key (unique identifier for this preference).
     pub storage_key: String,
+    /// The value of the preference, which can be any JSON value.
     pub value: Value,
+    /// The platform that this preference was set on.
+    /// If the preference is global, this will be set to Platform::Global.
     pub platform: Platform,
 }
 
 impl Preference {
+    /// Creates a new preference object with the given storage key and value and the appropriate
+    /// platform key for the given syncing mode.
+    /// Used when creating a new preference the first time.  For preferences synced from the
+    /// cloud they will desererialize directly from JSON.
     pub fn new(storage_key: String, value: &str, syncing_mode: SyncToCloud) -> Result<Self> {
         let platform = match syncing_mode {
             SyncToCloud::PerPlatform(_) => Platform::current_platform(),

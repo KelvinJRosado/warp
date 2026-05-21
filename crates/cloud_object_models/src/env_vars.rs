@@ -71,19 +71,25 @@ impl LastPassSecret {
     }
 }
 
-/// Defines the data model for a single environment variable.
+/// Defines the data model for a single environment variable
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default)]
 pub struct EnvVar {
+    // Variable name
     pub name: String,
+    // Variable value
     pub value: EnvVarValue,
+    // Description of variable
     pub description: Option<String>,
 }
 
-/// Defines the supported environment variable value forms.
+/// Defines the various forms a value can take
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum EnvVarValue {
+    // Represents a string variable, i.e. PORT=4000
     Constant(String),
+    // Represents a computed secret, i.e. gcloud print auth token
     Command(EnvVarSecretCommand),
+    // Represents a secret from an external secret manager
     Secret(ExternalSecret),
 }
 
@@ -103,11 +109,14 @@ impl EnvVar {
     }
 }
 
-/// Defines the data model for a cloud-synced collection of environment variables.
+/// Defines the data model for a cloud synced collection of environment variables.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default)]
 pub struct EnvVarCollection {
+    // Collection title
     pub title: Option<String>,
+    // Description of collection
     pub description: Option<String>,
+    // Environment variables associated with this collection
     pub vars: Vec<EnvVar>,
 }
 
@@ -137,6 +146,14 @@ pub fn serialize_variables_internal<'s, I: IntoIterator<Item = (&'s str, &'s Env
     delimiter: &str,
     shell_family: ShellFamily,
 ) -> String {
+    // Prefix — what's prepended to each variable
+    // Separator — what separates the variable name from the value
+    // Postfix — what's appended to the end of each variable
+    // Delimiter — what separates one variable from the next one
+    // set -x var_name var_value;   set -x name2 value2;
+    // ------     -             -   -
+    //   ^        ^             ^   ^
+    // prefix  separator   postfix  delimiter (in this case 4 spaces, usually one space or newline)
     pairs
         .into_iter()
         .map(|(name, value)| {

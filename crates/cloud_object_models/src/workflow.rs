@@ -47,9 +47,10 @@ impl Workflow {
         }
     }
 
-    /// The core content of the workflow.
+    /// The core "content" of the workflow.
     ///
-    /// For command workflows, this is the shell command. For agent mode workflows, this is the query.
+    /// For Command workflows, this is the shell command. For Agent Mode workflows, this is the
+    /// query.
     pub fn content(&self) -> &str {
         match self {
             Self::AgentMode { query, .. } => query,
@@ -123,9 +124,10 @@ impl Workflow {
         matches!(self, Self::AgentMode { .. })
     }
 
-    /// Returns `true` if the workflow name starts with the given character, case-insensitively.
+    /// Returns `true` if the workflow name starts with the given character (case-insensitive).
     ///
-    /// This is used by prompt search datasources to prefix-match on single-character queries, where fuzzy matching would be unreliable.
+    /// Used by prompt search datasources to prefix-match on single-character queries, where
+    /// fuzzy matching would be unreliable.
     pub fn name_starts_with_char_ignore_case(&self, c: char) -> bool {
         self.name()
             .chars()
@@ -133,7 +135,7 @@ impl Workflow {
             .is_some_and(|first| first.eq_ignore_ascii_case(&c))
     }
 
-    /// Returns a list of every enum ID referenced by this workflow.
+    /// Return a list of every enum ID referenced by this workflow.
     pub fn get_enum_ids(&self) -> Vec<SyncId> {
         self.arguments()
             .iter()
@@ -144,7 +146,7 @@ impl Workflow {
             .collect()
     }
 
-    /// Returns a list of every enum ID that has been synced to the server, used for telemetry.
+    /// Return a list of every enum ID that has been synced to the server, used for telemetry.
     pub fn get_server_enum_ids(&self) -> Vec<GenericStringObjectId> {
         self.arguments()
             .iter()
@@ -167,7 +169,7 @@ impl Workflow {
     }
 
     /// Given two IDs, replace any instance of the old ID referenced by this workflow with the new ID.
-    /// Returns `true` if any instances of the old ID were present.
+    /// Returns `true` if any instances of the old_id were present.
     pub fn replace_object_id(&mut self, old_id: SyncId, new_id: SyncId) -> bool {
         let mut changed = false;
         let arguments = match self {
@@ -250,9 +252,8 @@ impl Workflow {
     }
 }
 
-/// Creates a workflow model from a public-facing workflow.
-///
-/// See <https://github.com/warpdotdev/workflows/blob/main/workflow-types/src/lib.rs>.
+/// Create a warp-internal Workflow model from a public-facing workflow
+/// https://github.com/warpdotdev/workflows/blob/main/workflow-types/src/lib.rs
 impl From<warp_workflows::Workflow> for Workflow {
     fn from(workflow: warp_workflows::Workflow) -> Self {
         Workflow::Command {
@@ -270,11 +271,11 @@ impl From<warp_workflows::Workflow> for Workflow {
     }
 }
 
-/// Argument model used by Warp and warp-internal.
+/// Argument model to be used in `warp-internal`
 #[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq, Hash, Default)]
 pub struct Argument {
     pub name: String,
-    /// The type of the argument to the workflow.
+    /// The type of the argument to the workflow
     #[serde(flatten, deserialize_with = "deserialize_arg_type")]
     pub arg_type: ArgumentType,
     pub description: Option<String>,
@@ -329,7 +330,7 @@ impl Argument {
     }
 }
 
-/// The type of a workflow argument.
+/// The type of the workflow argument
 #[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq, Hash)]
 #[serde(tag = "arg_type")]
 #[derive(Default)]
@@ -337,14 +338,16 @@ pub enum ArgumentType {
     #[default]
     Text,
     Enum {
-        /// The ID of the associated workflow enum generic string object.
+        /// The ID of the associated WorkflowEnum Generic String Object
         enum_id: SyncId,
     },
 }
 
-/// Custom deserialization for argument types, used to both `flatten` the argument type and allow for the specification of `default` behavior.
+/// Custom deserialization for argument types, used to both `flatten` the argument type
+/// and allow for the specification of `default` behavior.
 ///
-/// This is necessary because serde currently does not support the use of `flatten` with a `default`. See <https://github.com/serde-rs/serde/issues/1626>.
+/// Necessary because serde currently does not support the use of `flatten` with a `default`,
+/// related GitHub issue here: https://github.com/serde-rs/serde/issues/1626
 fn deserialize_arg_type<'de, D>(deserializer: D) -> Result<ArgumentType, D::Error>
 where
     D: Deserializer<'de>,
@@ -369,6 +372,7 @@ where
     Ok(arg_type)
 }
 
+/// The model for a `CloudWorkflow`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CloudWorkflowModel {
     pub data: Workflow,
@@ -390,6 +394,7 @@ impl ServerObjectModel for CloudWorkflowModel {
 pub struct WorkflowId(ServerId);
 cloud_objects::server_id_traits! { WorkflowId, "Workflow" }
 
+/// `CloudWorkflow` is a workflow retrieved from the server.
 pub type CloudWorkflow = GenericCloudObject<WorkflowId, CloudWorkflowModel>;
 pub type ServerWorkflow = GenericServerObject<WorkflowId, CloudWorkflowModel>;
 

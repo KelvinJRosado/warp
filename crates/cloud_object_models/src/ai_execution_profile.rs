@@ -201,14 +201,20 @@ impl AskUserQuestionPermission {
     }
 }
 
+/// Predicate types to match commands that can be executed by Agent Mode.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 enum AgentModeCommandExecutionPredicateType {
+    /// A regex with start (`^`) and end (`$`) anchors.
+    ///
+    /// We want regex rules to apply to the entire cmd string so we anchor them
+    /// (there isn't any efficient way to apply to the entire cmd string at match-time).
     #[serde(with = "serde_regex")]
     AnchoredRegex(Regex),
 }
 
 impl AgentModeCommandExecutionPredicateType {
     fn new_regex(regex: &str) -> Result<Self, regex::Error> {
+        // Redundant anchors aren't a problem so we can unconditionally add them.
         let anchored_regex = Regex::new(&format!("^{regex}$"))?;
         Ok(Self::AnchoredRegex(anchored_regex))
     }
@@ -224,6 +230,8 @@ impl PartialEq for AgentModeCommandExecutionPredicateType {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::AnchoredRegex(a), Self::AnchoredRegex(b)) => {
+                // Indexing should be safe since they're guaranteed to have at least
+                // the anchors around them.
                 let a_unanchored = &a.as_str()[1..a.as_str().len() - 1];
                 let b_unanchored = &b.as_str()[1..b.as_str().len() - 1];
                 a_unanchored == b_unanchored
@@ -242,6 +250,8 @@ impl std::fmt::Display for AgentModeCommandExecutionPredicateType {
     }
 }
 
+/// A wrapper around [`AgentModeCommandExecutionPredicateType`] to enforce
+/// the use of the provided constructors rather than direct construction of the variants.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(transparent)]
 pub struct AgentModeCommandExecutionPredicate(AgentModeCommandExecutionPredicateType);
@@ -292,6 +302,8 @@ lazy_static! {
 cfg_if::cfg_if! {
     if #[cfg(test)] {
         lazy_static! {
+            // Compiling the regexes for the default command execution allowlist/denylist can be slow
+            // in an unoptimized build, so we use empty lists in unit tests.
             pub static ref DEFAULT_COMMAND_EXECUTION_ALLOWLIST: Vec<AgentModeCommandExecutionPredicate> = vec![];
             pub static ref DEFAULT_COMMAND_EXECUTION_DENYLIST: Vec<AgentModeCommandExecutionPredicate> = vec![];
         }

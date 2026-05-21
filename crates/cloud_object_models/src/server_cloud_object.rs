@@ -16,7 +16,7 @@ use crate::{
     ServerWorkflowEnum, TemplatableMCPServer, WorkflowEnum,
 };
 
-/// A concrete cloud object returned by the server.
+/// A cloud object from the server.
 #[derive(Clone, Debug)]
 pub enum ServerCloudObject {
     Notebook(ServerNotebook),
@@ -139,7 +139,7 @@ where
     }
 }
 
-/// Converts a GraphQL object payload into a local server object.
+/// Tries to convert a GraphQL object payload into a local server object.
 pub trait TryFromGql: Sized {
     type GqlType;
 

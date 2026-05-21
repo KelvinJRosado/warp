@@ -47,7 +47,8 @@ pub struct GcpProviderConfig {
     pub project_number: String,
     pub workload_identity_federation_pool_id: String,
     pub workload_identity_federation_provider_id: String,
-    /// Service account email for impersonation. When set, the federated token is exchanged for a service account access token.
+    /// Service account email for impersonation. When set, the federated token
+    /// is exchanged for a service account access token.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub service_account_email: Option<String>,
 }
@@ -71,7 +72,7 @@ impl ProvidersConfig {
     }
 }
 
-/// An ambient agent environment represents an environment that we would run a Warp agent in.
+/// An AmbientAgentEnvironment represents an environment that we would run a Warp agent in.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct AmbientAgentEnvironment {
     /// Environment name
