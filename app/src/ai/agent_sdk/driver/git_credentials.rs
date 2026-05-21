@@ -1,7 +1,7 @@
 /// Git credentials management for cloud agent sandboxes.
 ///
 /// This module handles:
-/// - Writing `~/.git-credentials` and `~/.config/gh/hosts.yaml` so that `git`
+/// - Writing `~/.git-credentials` and `~/.config/gh/hosts.yml` so that `git`
 ///   and the `gh` CLI can authenticate to GitHub without requiring environment
 ///   variables.
 /// - One-time git configuration (`credential.helper store`, SSH→HTTPS URL
@@ -26,6 +26,7 @@ pub(crate) const GIT_CREDENTIALS_REFRESH_INTERVAL: Duration = Duration::from_sec
 
 const DEFAULT_GIT_NAME: &str = "Oz";
 const DEFAULT_GIT_EMAIL: &str = "oz-agent@warp.dev";
+const GH_HOSTS_FILENAME: &str = "hosts.yml";
 
 fn home_dir() -> Result<PathBuf> {
     dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Could not determine home directory"))
@@ -99,7 +100,7 @@ fn write_git_credentials_file(credentials: &[GitCredential]) -> Result<()> {
     Ok(())
 }
 
-/// Write `~/.config/gh/hosts.yaml` so the `gh` CLI is authenticated.
+/// Write `~/.config/gh/hosts.yml` so the `gh` CLI is authenticated.
 ///
 /// The YAML format is stable for `gh` v2+:
 /// ```yaml
@@ -110,18 +111,21 @@ fn write_git_credentials_file(credentials: &[GitCredential]) -> Result<()> {
 /// ```
 ///
 /// The write is atomic: a temporary file is written then renamed.
-fn write_gh_hosts_yaml(credentials: &[GitCredential]) -> Result<()> {
+fn write_gh_hosts_yml(credentials: &[GitCredential]) -> Result<()> {
     if credentials.is_empty() {
         return Ok(());
     }
 
     let home = home_dir()?;
+    write_gh_hosts_yml_at_home(credentials, &home)
+}
+
+fn write_gh_hosts_yml_at_home(credentials: &[GitCredential], home: &std::path::Path) -> Result<()> {
     let gh_config_dir = home.join(".config").join("gh");
     std::fs::create_dir_all(&gh_config_dir)
         .with_context(|| format!("Failed to create {}", gh_config_dir.display()))?;
-
-    let path = gh_config_dir.join("hosts.yaml");
-    let tmp_path = gh_config_dir.join("hosts.yaml.tmp");
+    let path = gh_config_dir.join(GH_HOSTS_FILENAME);
+    let tmp_path = gh_config_dir.join(format!("{GH_HOSTS_FILENAME}.tmp"));
 
     let mut yaml = String::new();
     for cred in credentials {
@@ -147,7 +151,7 @@ fn write_gh_hosts_yaml(credentials: &[GitCredential]) -> Result<()> {
 
 pub(crate) fn write_git_credentials(credentials: &[GitCredential]) -> Result<()> {
     write_git_credentials_file(credentials)?;
-    write_gh_hosts_yaml(credentials)?;
+    write_gh_hosts_yml(credentials)?;
     Ok(())
 }
 
@@ -168,6 +172,41 @@ fn run_git_config(key: &str, value: &str) {
         Err(e) => {
             log::warn!("Failed to run git config --global {key}: {e}");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn write_gh_hosts_yml_uses_gh_cli_filename() -> Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let gh_config_dir = temp_dir.path().join(".config").join("gh");
+
+        write_gh_hosts_yml_at_home(
+            &[GitCredential {
+                token: "token".to_string(),
+                username: Some("octocat".to_string()),
+                email: Some("octocat@example.com".to_string()),
+                host: "github.com".to_string(),
+            }],
+            temp_dir.path(),
+        )?;
+
+        let hosts_path = gh_config_dir.join(GH_HOSTS_FILENAME);
+        assert!(hosts_path.exists());
+        assert!(!gh_config_dir
+            .join(format!("{GH_HOSTS_FILENAME}.tmp"))
+            .exists());
+
+        let hosts = std::fs::read_to_string(hosts_path)?;
+        assert!(hosts.contains("github.com:"));
+        assert!(hosts.contains("    oauth_token: token"));
+        assert!(hosts.contains("    git_protocol: https"));
+        assert!(hosts.contains("    user: octocat"));
+
+        Ok(())
     }
 }
 
@@ -270,7 +309,7 @@ async fn try_refresh(task_id: &str, ai_client: &Arc<dyn AIClient>) -> Result<()>
 /// On each iteration:
 /// 1. Issue a short-lived workload token.
 /// 2. Call `taskGitCredentials` to get a fresh token from the server.
-/// 3. Overwrite `~/.git-credentials` and `~/.config/gh/hosts.yaml`.
+/// 3. Overwrite `~/.git-credentials` and `~/.config/gh/hosts.yml`.
 ///
 /// On transient failure, the refresh is retried up to three times with
 /// exponential backoff (1 min, 2 min, 4 min), keeping all retries within the
