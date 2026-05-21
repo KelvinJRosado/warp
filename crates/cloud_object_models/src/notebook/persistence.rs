@@ -20,6 +20,7 @@ pub fn upsert_notebooks(
     use schema::notebooks::dsl::*;
     conn.transaction::<(), Error, _>(|conn| {
         for cloud_notebook in cloud_notebooks {
+            // todo: wrap in an arc to avoid unnecessary cloning.
             let notebook_clone = cloud_notebook.clone();
             let title_clone = cloud_notebook.model().title.clone();
             let data_clone = cloud_notebook.model().data.clone();

@@ -23,6 +23,7 @@ pub fn read_time_of_next_force_object_refresh(
     conn: &mut SqliteConnection,
 ) -> Result<Option<DateTime<Utc>>, Error> {
     use schema::cloud_objects_refreshes::dsl::*;
+    // Find the smallest refresh timestamp to pass into CloudModel.
     Ok(cloud_objects_refreshes
         .select(time_of_next_refresh)
         .load::<NaiveDateTime>(conn)?

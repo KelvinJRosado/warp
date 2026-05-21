@@ -27,15 +27,21 @@ use crate::{decode_guests, decode_link_sharing, encode_guests, encode_link_shari
 /// The SQLite id of a cloud object.
 pub type CloudObjectId = i32;
 
-/// When upserting a cloud object, this callback creates the cloud object itself.
+/// When upserting a cloud object, this callback is used to create the cloud
+/// object itself. It returns the id of the created cloud object.
+/// Note: the supplied conn has already started a transaction.
 pub type CreateCloudObjectFn =
     Box<dyn FnOnce(&mut SqliteConnection) -> Result<CloudObjectId, Error>>;
 
-/// When upserting a cloud object, this callback updates the cloud object itself.
+/// When upserting a cloud object, this callback is used to update the cloud
+/// object. It takes the id of the cloud object to update as a parameter.
+/// The supplied conn has already started a transaction.
 pub type UpdateCloudObjectFn =
     Box<dyn FnOnce(&mut SqliteConnection, CloudObjectId) -> Result<(), Error>>;
 
-/// When deleting a cloud object, this callback deletes the cloud object itself.
+/// When delete a cloud object, this callback is used to delete the cloud
+/// object. It takes the id of the cloud object to delete as a parameter.
+/// The supplied conn has already started a transaction.
 pub type DeleteCloudObjectFn =
     Box<dyn FnOnce(&mut SqliteConnection, CloudObjectId) -> Result<(), Error>>;
 
@@ -89,6 +95,7 @@ pub fn load_cloud_object_read_context(
     let object_permissions =
         schema::object_permissions::dsl::object_permissions.load::<ObjectPermissions>(conn)?;
 
+    // Cache metadata and permissions by id so that we aren't doing an n^2 lookups for each object type.
     let metadata_by_id = object_metadata
         .into_iter()
         .map(|metadata| {
@@ -98,6 +105,9 @@ pub fn load_cloud_object_read_context(
             )
         })
         .collect::<HashMap<_, _>>();
+    // Shareable object ids aren't unique across object types, so the object type needs to be
+    // part of the hashmap key.  For generic objects, they are all in the same table,
+    // so it's safe to use the generic prefix as part of the key.
     let permissions_by_id = object_permissions
         .into_iter()
         .map(|permissions| (permissions.object_metadata_id, permissions))
@@ -192,6 +202,10 @@ pub fn upsert_cloud_object(
     let has_pending_content_changes = cloud_object_metadata.has_pending_content_changes();
 
     let hashed_sync_id = sync_id.sqlite_uid_hash(cloud_object_type.into());
+    // Filter to find metadata row.
+    // The diesel types for `filter`s are dependent on the columns being filtered
+    // so while the `hashed_sync_id` will only match one of `client_id` and `server_id`,
+    // we filter on both here for ergonomics.
     let metadata_filter = object_metadata
         .filter(client_id.eq(Some(hashed_sync_id.as_str())))
         .or_filter(server_id.eq(Some(hashed_sync_id.as_str())));
@@ -199,6 +213,7 @@ pub fn upsert_cloud_object(
 
     match metadata {
         Some(metadata) => {
+            // The object already exists in sqlite so update the object.
             update_object_fn(conn, metadata.shareable_object_id)?;
 
             let metadata_last_updated_at = cloud_object_metadata
@@ -211,6 +226,8 @@ pub fn upsert_cloud_object(
                 .folder_id
                 .map(|folder_sync_id| folder_sync_id.sqlite_uid_hash(ObjectIdType::Folder));
 
+            // Update the metadata. Note: this is holistic write of all the metadata based on the current state of the in-memory object.
+            // TODO: we need to update author_id as well.
             diesel::update(metadata_filter)
                 .set((
                     revision_ts.eq(revision),
@@ -237,6 +254,7 @@ pub fn upsert_cloud_object(
                 .pending_changes_statuses
                 .has_pending_permissions_change
             {
+                // Update the permissions.
                 let permissions_filter =
                     object_permissions.filter(object_metadata_id.eq(metadata.id));
                 diesel::update(permissions_filter)
@@ -253,14 +271,18 @@ pub fn upsert_cloud_object(
             }
         }
         None => {
+            // The object doesn't exist in sqlite so create the object.
             let object_id = create_object_fn(conn)?;
+            // Create the metadata.
             let mut new_object_metadata = NewObjectMetadata {
                 object_type: cloud_object_type.sqlite_object_type_as_str().to_string(),
                 revision_ts: revision,
                 shareable_object_id: object_id,
                 is_pending: has_pending_content_changes,
                 retry_count: 0,
+                // TODO: we need to deserialize this from graphql.
                 author_id: None,
+                // One of these is set below.
                 client_id: None,
                 server_id: None,
                 metadata_last_updated_ts: cloud_object_metadata
@@ -272,12 +294,17 @@ pub fn upsert_cloud_object(
                 folder_id: cloud_object_metadata
                     .folder_id
                     .map(|sync_id| sync_id.sqlite_uid_hash(ObjectIdType::Folder)),
+                // When we insert an object, mark whether it's a welcome object. This
+                // field won't ever be updated and this is the only pathway for it to be set.
                 is_welcome_object: cloud_object_metadata.is_welcome_object,
                 creator_uid: cloud_object_metadata.creator_uid,
                 last_editor_uid: cloud_object_metadata.last_editor_uid,
                 current_editor: cloud_object_metadata.current_editor_uid,
             };
 
+            // There are two distinct cases:
+            // - If the client created this object, the clientId will be set. There is another model event to set the server id.
+            // - Otherwise, the server notified the client about this object so only the serverId will be set.
             match sync_id {
                 SyncId::ClientId(_) => {
                     new_object_metadata.client_id = Some(hashed_sync_id);
@@ -290,11 +317,14 @@ pub fn upsert_cloud_object(
                 .values(new_object_metadata)
                 .execute(conn)?;
 
+            // Retrieve the ID of the row that was just inserted. We need to
+            // do it this way because sqlite doesn't support RETURNING.
             let metadata_id: i32 = schema::object_metadata::dsl::object_metadata
                 .select(schema::object_metadata::dsl::id)
                 .order(schema::object_metadata::dsl::id.desc())
                 .first(conn)?;
 
+            // Create the permissions.
             let new_object_permissions = NewObjectPermissions {
                 object_metadata_id: metadata_id,
                 subject_type: subject_type_value.to_owned(),
@@ -314,6 +344,8 @@ pub fn upsert_cloud_object(
     Ok(())
 }
 
+/// Helper function to delete a cloud object identified by `sync_id`. If a valid object metadata row
+/// for the object is found, `delete_object_fn` is called to delete the actual object.
 pub fn delete_cloud_object(
     conn: &mut SqliteConnection,
     sync_id: SyncId,
@@ -323,6 +355,10 @@ pub fn delete_cloud_object(
     use schema::object_metadata::dsl::*;
 
     let hashed_sync_id = sync_id.sqlite_uid_hash(object_id_type);
+    // Filter to find metadata row.
+    // The diesel types for `filter`s are dependent on the columns being filtered
+    // so while the `hashed_sync_id` will only match one of `client_id` and `server_id`,
+    // we filter on both here for ergonomics.
     let metadata_filter = object_metadata
         .filter(client_id.eq(Some(hashed_sync_id.as_str())))
         .or_filter(server_id.eq(Some(hashed_sync_id.as_str())));
@@ -410,6 +446,7 @@ pub fn delete_generic_string_object(
     Ok(())
 }
 
+/// Mark a shareable object as no longer having pending changes.
 pub fn mark_object_as_synced(
     conn: &mut SqliteConnection,
     hashed_sqlite_id: String,
@@ -484,6 +521,8 @@ pub fn update_object_after_server_creation(
     })
 }
 
+/// SQLite endpoint for the ObjectMetadataUpdated RTC message that updates the metadata ts and other
+/// metadata like current team_id of the object.
 pub fn update_object_metadata(
     conn: &mut SqliteConnection,
     hashed_id: String,
@@ -547,9 +586,11 @@ pub fn to_cloud_object_metadata(metadata: &ObjectMetadata) -> CloudObjectMetadat
             .trashed_ts
             .and_then(|epoch| ServerTimestamp::from_unix_timestamp_micros(epoch).ok()),
         folder_id: metadata.folder_id.as_ref().and_then(|folder_id_str| {
+            // First, attempt to convert the string into a server id.
             let as_server_id =
                 FolderId::from_hash(folder_id_str).map(|id| SyncId::ServerId(id.into()));
             if as_server_id.is_none() {
+                // If the string cannot be converted to server id, it may be a client id.
                 ClientId::from_hash(folder_id_str).map(SyncId::ClientId)
             } else {
                 as_server_id
@@ -571,6 +612,7 @@ pub fn to_cloud_object_permissions(
         .permissions_last_updated_at
         .and_then(|ts| ServerTimestamp::from_unix_timestamp_micros(ts).ok());
 
+    // If deserializing guests fails, default to None and wait for an eventual refresh.
     let guests = if FeatureFlag::SharedWithMe.is_enabled() {
         permissions
             .object_guests
@@ -581,6 +623,8 @@ pub fn to_cloud_object_permissions(
         Default::default()
     };
 
+    // If deserializing link sharing fails, default to None and wait for an
+    // eventual refresh.
     let anyone_with_link = if FeatureFlag::SharedWithMe.is_enabled() {
         permissions
             .anyone_with_link_access_level

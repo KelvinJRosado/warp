@@ -162,6 +162,7 @@ pub fn read_generic_string_objects(
                         )
                     })
                 }
+                // TODO: Implement CloudAgentConfig model when full sync support is added
                 JsonObjectType::CloudAgentConfig => None,
             }
         })

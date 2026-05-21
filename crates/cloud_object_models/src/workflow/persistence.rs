@@ -21,6 +21,7 @@ pub fn upsert_workflows(
         for cloud_workflow in cloud_workflows {
             let workflow_id = cloud_workflow.id;
             if let Ok(serialized_workflow) = serde_json::to_string(&cloud_workflow.model().data) {
+                // todo: wrap in an arc to avoid unnecessary cloning.
                 let serialized_workflow_clone = serialized_workflow.clone();
                 upsert_cloud_object(
                     conn,
