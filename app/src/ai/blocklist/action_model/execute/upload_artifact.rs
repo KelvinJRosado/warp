@@ -24,6 +24,7 @@ use crate::{
     server::server_api::ServerApiProvider,
 };
 
+#[cfg(not(target_family = "wasm"))]
 fn format_upload_artifact_error(err: &anyhow::Error) -> String {
     let root_cause = err
         .chain()
