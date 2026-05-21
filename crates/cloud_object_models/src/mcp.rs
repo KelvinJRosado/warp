@@ -67,12 +67,15 @@ pub struct CLIServer {
     #[serde(default)]
     pub args: Vec<String>,
     pub cwd_parameter: Option<String>,
+    /// Static env vars added via editor inputs.
     pub static_env_vars: Vec<StaticEnvVar>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StaticEnvVar {
     pub name: String,
+    /// To avoid leaking environment variables, we ensure that values are not
+    /// serialized before being sent to our servers
     #[serde(skip_serializing, default)]
     pub value: String,
 }
@@ -80,6 +83,8 @@ pub struct StaticEnvVar {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StaticHeader {
     pub name: String,
+    /// To avoid leaking header values (which may contain secrets), we ensure that values are not
+    /// serialized before being sent to our servers
     #[serde(skip_serializing, default)]
     pub value: String,
 }
@@ -87,6 +92,7 @@ pub struct StaticHeader {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ServerSentEvents {
     pub url: String,
+    /// Static headers added via editor inputs.
     #[serde(default)]
     pub headers: Vec<StaticHeader>,
 }
@@ -110,6 +116,8 @@ pub struct JsonTemplate {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Hash)]
 pub struct TemplateVariable {
     pub key: String,
+    /// When present, the variable should be filled via a dropdown of these values
+    /// instead of a freetext input.
     #[serde(default)]
     pub allowed_values: Option<Vec<String>>,
 }
@@ -127,7 +135,7 @@ pub struct TemplatableMCPServer {
     pub description: Option<String>,
     pub template: JsonTemplate,
     #[serde(default)]
-    pub version: i64,
+    pub version: i64, // This will default to 0 if stored objects have no version
     pub gallery_data: Option<GalleryData>,
 }
 
@@ -139,6 +147,8 @@ pub enum FromStoredJsonError {
 }
 
 impl TemplatableMCPServer {
+    /// Looks for MCP servers under known wrapper keys (`mcpServers`, `servers`,
+    /// `mcp.servers`, `mcp_servers`). Returns `None` if no known key is found.
     fn find_servers_under_known_keys(
         config: &serde_json::Value,
     ) -> Option<HashMap<String, serde_json::Value>> {
@@ -155,14 +165,25 @@ impl TemplatableMCPServer {
         None
     }
 
+    /// Permissively parses MCP servers from JSON.
+    ///
+    /// Accepts servers under known wrapper keys (VSCode, Claude Desktop, etc.)
+    /// and also falls back to treating the entire object as a bare server map.
+    /// This is appropriate for user-pasted input.
     pub fn find_template_map(
         config: serde_json::Value,
     ) -> serde_json::Result<HashMap<String, serde_json::Value>> {
         if let Some(servers) = Self::find_servers_under_known_keys(&config) {
             return Ok(servers);
         }
+        // Fallback: treat the entire object as a bare map of servers.
         serde_json::from_value::<HashMap<String, serde_json::Value>>(config)
     }
+    /// Like [`find_template_map`], but without the bare-object fallback.
+    ///
+    /// Returns servers only when found under a known wrapper key. This prevents
+    /// misinterpreting unrelated JSON files (e.g. Claude Code's `~/.claude.json`
+    /// settings) as MCP config.
 
     pub fn find_template_map_strict(
         config: &serde_json::Value,
@@ -171,18 +192,24 @@ impl TemplatableMCPServer {
     }
 
     pub fn to_user_json(&self) -> String {
-        let value: serde_json::Value =
-            serde_json::from_str(&self.template.json).unwrap_or_else(|err| {
+        let value: serde_json::Value = serde_json::from_str(&self.template.json)
+            // All templates should be valid JSON - this should never fail
+            // Ones that are not should not have been saved in the first place
+            .unwrap_or_else(|err| {
                 log::error!("Could not parse MCP server template to json: {err:?}");
                 Default::default()
             });
-
-        serde_json::to_string_pretty(&value).unwrap_or_else(|err| {
-            log::error!("Could not serialize MCP server to user json: {err:?}");
-            Default::default()
-        })
+        serde_json::to_string_pretty(&value)
+            // serde_json::to_string_pretty should never fail on this value since we just parsed it as valid json
+            .unwrap_or_else(|err| {
+                log::error!("Could not serialize MCP server to user json: {err:?}");
+                Default::default()
+            })
     }
 
+    // Uses from_user_json to parse the json and then returns the first TemplatableMCPServer
+    // This is meant to be used for stored json from the database, which should only contain
+    // a single server and already checked for json validity
     pub fn from_stored_json(
         json: &str,
         uuid: uuid::Uuid,
@@ -191,11 +218,13 @@ impl TemplatableMCPServer {
         match templates {
             Ok(templates) => {
                 if templates.is_empty() {
+                    // This should never happen for stored json from the database
                     log::error!("No templatable MCP servers found in stored json: {uuid}");
                     Err(FromStoredJsonError::NoServersFound)
                 } else if templates.len() > 1 {
                     Err(FromStoredJsonError::TooManyServersFound)
                 } else {
+                    // templates should always contain exactly one server for stored json from the database
                     let mut templatable_mcp_server = templates[0].clone();
                     templatable_mcp_server.uuid = uuid;
                     Ok(templatable_mcp_server)
@@ -206,6 +235,7 @@ impl TemplatableMCPServer {
     }
 
     pub fn from_user_json(json: &str) -> serde_json::Result<Vec<TemplatableMCPServer>> {
+        // Some docs don't show curly braces around the json object, so add them if necessary.
         let json = json.trim();
         let json = if json.starts_with("{") {
             json.to_owned()
@@ -218,6 +248,9 @@ impl TemplatableMCPServer {
         Ok(template_jsons
             .iter()
             .map(|(name, json)| {
+                // Each template_json is the nested config for a single MCP server
+                // We need to re-wrap it in a top level object so that we can
+                // reuse from_user_json to read it later
                 let normalized_map =
                     serde_json::Map::from_iter(vec![(name.to_owned(), json.clone())]);
                 let normalized_json = serde_json::Value::Object(normalized_map).to_string();

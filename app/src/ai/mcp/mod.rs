@@ -424,7 +424,7 @@ impl MCPServerExt for MCPServer {
         });
 
         let templatable_mcp_server = TemplatableMCPServer {
-            uuid: self.uuid, // UUIDs must be preserved so we can match legacy and shared templatable MCP servers.
+            uuid: self.uuid, // UUIDs must be preserved so we can match legacy and (shared) templatable MCP servers
             name: self.name.clone(),
             description: None,
             template: JsonTemplate { json, variables },
