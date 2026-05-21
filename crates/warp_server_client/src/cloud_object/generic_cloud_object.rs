@@ -133,7 +133,7 @@ impl<K, M> GenericCloudObject<K, M> {
         }
     }
 
-    /// Creates a new `GenericCloudObject` from a `ServerObject`.
+    /// Creates a new [`GenericCloudObject`] from a [`GenericServerObject`].
     pub fn new_from_server(server_object: GenericServerObject<K, M>) -> Self {
         Self {
             id: server_object.id,
