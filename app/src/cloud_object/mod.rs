@@ -1319,7 +1319,6 @@ where
 {
     type GqlType = warp_graphql::generic_string_object::GenericStringObject;
 
-    /// Helper function to create a `ServerObject` that has a GenericStringObjectId from common graphql fields.
     fn try_from_gql(value: Self::GqlType) -> Result<Self> {
         let uid = ServerId::from_string_lossy(value.metadata.uid.inner());
         let model = GenericStringModel::<T, S>::deserialize_owned(&value.serialized_model)?;
@@ -1334,7 +1333,6 @@ where
 
 impl TryFromGql for ServerFolder {
     type GqlType = warp_graphql::folder::Folder;
-    /// Helper function to create a `ServerFolder` from common graphql fields.
 
     fn try_from_gql(value: Self::GqlType) -> Result<Self> {
         let uid = ServerId::from_string_lossy(value.metadata.uid.inner());
@@ -1349,7 +1347,6 @@ impl TryFromGql for ServerFolder {
 
 impl TryFromGql for ServerNotebook {
     type GqlType = warp_graphql::notebook::Notebook;
-    /// Helper function to create a `ServerNotebook` from common graphql fields.
 
     fn try_from_gql(value: Self::GqlType) -> Result<Self> {
         let uid = ServerId::from_string_lossy(value.metadata.uid.inner());
@@ -1373,7 +1370,6 @@ impl TryFromGql for ServerNotebook {
 
 impl TryFromGql for ServerWorkflow {
     type GqlType = warp_graphql::workflow::Workflow;
-    /// Helper function to create a `ServerWorkflow` from common graphql fields.
 
     fn try_from_gql(value: Self::GqlType) -> Result<Self> {
         let uid = ServerId::from_string_lossy(value.metadata.uid.inner());
