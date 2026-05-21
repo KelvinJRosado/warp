@@ -44,6 +44,8 @@ mod gpu_state;
 mod input_classifier;
 mod interval_timer;
 mod linear;
+#[cfg(not(target_family = "wasm"))]
+mod local_control;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 mod login_item;
 mod menu;
@@ -1998,6 +2000,14 @@ pub(crate) fn initialize_app(
         ];
         http_server::HttpServer::new(routers, ctx)
     });
+    #[cfg(not(target_family = "wasm"))]
+    if matches!(
+        launch_mode,
+        LaunchMode::App { .. } | LaunchMode::Test { .. }
+    ) {
+        ctx.add_singleton_model(local_control::LocalControlBridge::new);
+        ctx.add_singleton_model(local_control::LocalControlServer::new);
+    }
 
     app_state
 }

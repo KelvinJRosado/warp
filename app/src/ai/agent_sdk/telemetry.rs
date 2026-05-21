@@ -72,6 +72,10 @@ pub(super) enum CliTelemetryEvent {
     IntegrationUpdate,
     /// Executing `warp integration list`
     IntegrationList,
+    /// Executing `warp app ...`
+    LocalControlApp,
+    /// Executing `warp instance ...`
+    LocalControlInstance,
     /// Executing `warp artifact upload`
     ArtifactUpload,
     /// Executing `warp artifact get`
@@ -172,6 +176,8 @@ impl TelemetryEvent for CliTelemetryEvent {
             CliTelemetryEvent::IntegrationCreate => None,
             CliTelemetryEvent::IntegrationUpdate => None,
             CliTelemetryEvent::IntegrationList => None,
+            CliTelemetryEvent::LocalControlApp => None,
+            CliTelemetryEvent::LocalControlInstance => None,
             CliTelemetryEvent::ArtifactUpload => None,
             CliTelemetryEvent::ArtifactGet => None,
             CliTelemetryEvent::ArtifactDownload => None,
@@ -258,6 +264,10 @@ impl TelemetryEventDesc for CliTelemetryEventDiscriminants {
             CliTelemetryEventDiscriminants::IntegrationCreate => "CLI.Execute.Integration.Create",
             CliTelemetryEventDiscriminants::IntegrationUpdate => "CLI.Execute.Integration.Update",
             CliTelemetryEventDiscriminants::IntegrationList => "CLI.Execute.Integration.List",
+            CliTelemetryEventDiscriminants::LocalControlApp => "CLI.Execute.LocalControl.App",
+            CliTelemetryEventDiscriminants::LocalControlInstance => {
+                "CLI.Execute.LocalControl.Instance"
+            }
             CliTelemetryEventDiscriminants::ArtifactUpload => "CLI.Execute.Artifact.Upload",
             CliTelemetryEventDiscriminants::ArtifactGet => "CLI.Execute.Artifact.Get",
             CliTelemetryEventDiscriminants::ArtifactDownload => "CLI.Execute.Artifact.Download",
@@ -361,6 +371,12 @@ impl TelemetryEventDesc for CliTelemetryEventDiscriminants {
             }
             CliTelemetryEventDiscriminants::IntegrationList => {
                 "Listed integrations from the Warp CLI"
+            }
+            CliTelemetryEventDiscriminants::LocalControlApp => {
+                "Sent a local-control app request from the Warp CLI"
+            }
+            CliTelemetryEventDiscriminants::LocalControlInstance => {
+                "Inspected local-control instances from the Warp CLI"
             }
             CliTelemetryEventDiscriminants::ArtifactUpload => {
                 "Uploaded an artifact from the Warp CLI"
