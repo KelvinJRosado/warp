@@ -61,7 +61,7 @@ on:
         type: boolean
         default: false
       post_slack_changelog_payload:
-        description: Post the representative Slack changelog format preview to #release.
+        description: "Post the representative Slack changelog format preview to #release."
         type: boolean
         default: false
 
@@ -1855,7 +1855,7 @@ jobs:
           cat "$SLACK_PAYLOAD" >> $GITHUB_OUTPUT
           echo "SLACK_PAYLOAD_EOF" >> $GITHUB_OUTPUT
 
-      - name: Post Slack changelog format preview to #release
+      - name: "Post Slack changelog format preview to #release"
         if: ${{ inputs.post_slack_changelog_payload == true }}
         uses: slackapi/slack-github-action@410ae57cff5c6b682b106440be0e6c7eb8c98c9d # v1.16.0
         with:
