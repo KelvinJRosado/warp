@@ -1536,15 +1536,12 @@ fn render_vertical_tabs_panel(
         super::PanelPosition::Right => DragBarSide::Left,
     };
     // Wrap the panel in a `Hoverable` so right-clicking the empty area of the
-    // vertical tabs panel opens the tab configs dropdown. 
-    let inner = Hoverable::new(
-        state.panel_right_click_mouse_state.clone(),
-        |_| {
-            Container::new(panel_with_popup)
-                .with_background(internal_colors::fg_overlay_1(theme))
-                .finish()
-        },
-    )
+    // vertical tabs panel opens the tab configs dropdown.
+    let inner = Hoverable::new(state.panel_right_click_mouse_state.clone(), |_| {
+        Container::new(panel_with_popup)
+            .with_background(internal_colors::fg_overlay_1(theme))
+            .finish()
+    })
     .on_right_click(|ctx, _, position| {
         if FeatureFlag::GroupedTabs.is_enabled() {
             ctx.dispatch_typed_action(WorkspaceAction::OpenNewSessionMenu {

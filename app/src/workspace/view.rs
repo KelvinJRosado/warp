@@ -6556,7 +6556,7 @@ impl Workspace {
             #[cfg(not(feature = "local_fs"))]
             NewSessionMenuItem::CreateNewTabConfig => {}
             NewSessionMenuItem::CreateNewTabGroup => {
-                // TODO(johnturcoo): implement tab group creation. 
+                // TODO(johnturcoo): implement tab group creation.
             }
         }
     }
@@ -21302,9 +21302,7 @@ impl TypedActionView for Workspace {
             SaveCurrentTabAsNewConfig(tab_index) => {
                 self.save_current_tab_as_new_config(*tab_index, ctx)
             }
-            ToggleNewSessionMenu { anchor } => {
-                self.toggle_new_session_dropdown_menu(*anchor, ctx)
-            }
+            ToggleNewSessionMenu { anchor } => self.toggle_new_session_dropdown_menu(*anchor, ctx),
             SelectNewSessionMenuItem(new_session_menu_item) => {
                 self.open_launch_config_from_menu(new_session_menu_item.clone(), ctx)
             }
