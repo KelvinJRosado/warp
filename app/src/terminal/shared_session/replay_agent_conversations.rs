@@ -178,7 +178,11 @@ fn create_finished_event_from_conversation(conversation: &AIConversation) -> Res
                 .iter()
                 .filter_map(|u| u.to_proto_byok_usage())
                 .collect(),
-            custom_endpoint_token_usage: Default::default(),
+            custom_endpoint_token_usage: conversation
+                .token_usage()
+                .iter()
+                .filter_map(|u| u.to_proto_custom_endpoint_usage())
+                .collect(),
         },
     );
 

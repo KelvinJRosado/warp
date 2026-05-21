@@ -1091,15 +1091,22 @@ pub fn token_usage_category_display_name(category: &str) -> String {
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct ModelTokenUsage {
     pub model_id: String,
+    /// Server-side custom endpoint config key used to faithfully replay usage metadata.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub custom_endpoint_config_key: Option<String>,
     /// Alias for backward compat: old persisted data used `total_tokens` for warp usage.
     #[serde(default, alias = "total_tokens")]
     pub warp_tokens: u32,
     #[serde(default)]
     pub byok_tokens: u32,
     #[serde(default)]
+    pub custom_endpoint_tokens: u32,
+    #[serde(default)]
     pub warp_token_usage_by_category: HashMap<TokenUsageCategory, u32>,
     #[serde(default)]
     pub byok_token_usage_by_category: HashMap<TokenUsageCategory, u32>,
+    #[serde(default)]
+    pub custom_endpoint_token_usage_by_category: HashMap<TokenUsageCategory, u32>,
 }
 
 impl ModelTokenUsage {
@@ -1132,16 +1139,38 @@ impl ModelTokenUsage {
     pub fn to_proto_byok_usage(&self) -> Option<(String, stream_finished::ModelTokenUsage)> {
         self.to_proto_usage(self.byok_tokens, &self.byok_token_usage_by_category)
     }
+    #[allow(deprecated)]
+    pub fn to_proto_custom_endpoint_usage(
+        &self,
+    ) -> Option<(String, stream_finished::ModelTokenUsage)> {
+        let config_key = self.custom_endpoint_config_key.clone()?;
+        if self.custom_endpoint_tokens == 0 {
+            return None;
+        }
+        Some((
+            config_key.clone(),
+            stream_finished::ModelTokenUsage {
+                model_id: config_key,
+                total_tokens: self.custom_endpoint_tokens,
+                token_usage_by_category: self
+                    .custom_endpoint_token_usage_by_category
+                    .iter()
+                    .map(|(cat, tokens)| (cat.clone(), *tokens))
+                    .collect(),
+            },
+        ))
+    }
 
     #[allow(deprecated)]
     pub fn to_proto_combined(&self) -> stream_finished::ModelTokenUsage {
         stream_finished::ModelTokenUsage {
             model_id: self.model_id.clone(),
-            total_tokens: self.warp_tokens + self.byok_tokens,
+            total_tokens: self.warp_tokens + self.byok_tokens + self.custom_endpoint_tokens,
             token_usage_by_category: self
                 .warp_token_usage_by_category
                 .iter()
                 .chain(self.byok_token_usage_by_category.iter())
+                .chain(self.custom_endpoint_token_usage_by_category.iter())
                 .fold(HashMap::new(), |mut acc, (cat, tokens)| {
                     *acc.entry(cat.clone()).or_insert(0) += tokens;
                     acc
@@ -1357,7 +1386,9 @@ pub struct NewMCPServerInstallation {
 
 #[cfg(test)]
 mod tests {
-    use super::AgentConversationData;
+    use std::collections::HashMap;
+
+    use super::{AgentConversationData, ModelTokenUsage};
 
     #[test]
     fn agent_conversation_data_roundtrips_last_event_sequence() {
@@ -1538,6 +1569,30 @@ mod tests {
         let data: AgentConversationData =
             serde_json::from_str(legacy_json).expect("legacy rows must deserialize");
         assert!(!data.pinned);
+    }
+
+    #[allow(deprecated)]
+    #[test]
+    fn model_token_usage_replays_custom_endpoint_usage_by_config_key() {
+        let usage = ModelTokenUsage {
+            model_id: "Friendly alias".to_string(),
+            custom_endpoint_config_key: Some("config-key".to_string()),
+            custom_endpoint_tokens: 6,
+            custom_endpoint_token_usage_by_category: HashMap::from([(
+                "primary_agent".to_string(),
+                6,
+            )]),
+            ..Default::default()
+        };
+
+        let (config_key, proto) = usage
+            .to_proto_custom_endpoint_usage()
+            .expect("custom endpoint usage should serialize for replay");
+
+        assert_eq!(config_key, "config-key");
+        assert_eq!(proto.model_id, "config-key");
+        assert_eq!(proto.total_tokens, 6);
+        assert_eq!(proto.token_usage_by_category.get("primary_agent"), Some(&6));
     }
 }
 

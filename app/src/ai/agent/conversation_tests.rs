@@ -238,9 +238,16 @@ fn update_cost_and_usage_resolves_custom_endpoint_alias_for_footer_usage() {
             .iter()
             .find(|usage| usage.model_id == "Friendly alias")
             .expect("custom endpoint alias should resolve into footer usage");
-        assert_eq!(usage.byok_tokens, 6);
         assert_eq!(
-            usage.byok_token_usage_by_category.get("primary_agent"),
+            usage.custom_endpoint_config_key.as_deref(),
+            Some("config-key")
+        );
+        assert_eq!(usage.custom_endpoint_tokens, 6);
+        assert_eq!(usage.byok_tokens, 0);
+        assert_eq!(
+            usage
+                .custom_endpoint_token_usage_by_category
+                .get("primary_agent"),
             Some(&6)
         );
     });
@@ -270,9 +277,16 @@ fn update_cost_and_usage_uses_fallback_label_for_unknown_custom_endpoint() {
             .iter()
             .find(|usage| usage.model_id == "Custom endpoint")
             .expect("unknown custom endpoint usage should use the fallback label");
-        assert_eq!(usage.byok_tokens, 9);
         assert_eq!(
-            usage.byok_token_usage_by_category.get("primary_agent"),
+            usage.custom_endpoint_config_key.as_deref(),
+            Some("missing-config-key")
+        );
+        assert_eq!(usage.custom_endpoint_tokens, 9);
+        assert_eq!(usage.byok_tokens, 0);
+        assert_eq!(
+            usage
+                .custom_endpoint_token_usage_by_category
+                .get("primary_agent"),
             Some(&9)
         );
     });
@@ -316,7 +330,7 @@ fn footer_model_token_usage_keeps_custom_endpoint_usage_distinct_from_same_label
         .expect("existing model usage should be present");
     let custom_usage = model_usage
         .iter()
-        .find(|usage| usage.model_id == "Resolved custom" && usage.byok_tokens == 6)
+        .find(|usage| usage.model_id == "Resolved custom" && usage.custom_endpoint_tokens == 6)
         .expect("custom endpoint usage should remain distinct");
 
     assert_eq!(model_usage.len(), 2);
@@ -325,11 +339,18 @@ fn footer_model_token_usage_keeps_custom_endpoint_usage_distinct_from_same_label
         Some(&4)
     );
     assert_eq!(
-        custom_usage.byok_token_usage_by_category.get(&category),
+        custom_usage
+            .custom_endpoint_token_usage_by_category
+            .get(&category),
         Some(&6)
     );
     assert_eq!(byok_usage.warp_tokens, 0);
     assert_eq!(custom_usage.warp_tokens, 0);
+    assert_eq!(custom_usage.byok_tokens, 0);
+    assert_eq!(
+        custom_usage.custom_endpoint_config_key.as_deref(),
+        Some("config-key")
+    );
 }
 #[allow(deprecated)]
 #[test]
@@ -362,12 +383,19 @@ fn footer_model_token_usage_preserves_unresolved_custom_endpoint_usage_with_fall
         .expect("fallback custom endpoint usage should be present");
 
     assert_eq!(model_usage.len(), 1);
-    assert_eq!(custom_usage.byok_tokens, 9);
+    assert_eq!(custom_usage.custom_endpoint_tokens, 9);
+    assert_eq!(custom_usage.byok_tokens, 0);
     assert_eq!(
-        custom_usage.byok_token_usage_by_category.get(&category),
+        custom_usage
+            .custom_endpoint_token_usage_by_category
+            .get(&category),
         Some(&9)
     );
     assert_eq!(custom_usage.warp_tokens, 0);
+    assert_eq!(
+        custom_usage.custom_endpoint_config_key.as_deref(),
+        Some("missing-config-key")
+    );
 }
 
 #[test]

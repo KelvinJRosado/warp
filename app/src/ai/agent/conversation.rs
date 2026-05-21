@@ -118,12 +118,13 @@ fn footer_model_token_usage(
             .entry(format!("custom_endpoint~{config_key}"))
             .or_insert_with(|| ModelTokenUsage {
                 model_id: label,
+                custom_endpoint_config_key: Some(config_key.clone()),
                 ..Default::default()
             });
-        entry.byok_tokens += usage.total_tokens;
+        entry.custom_endpoint_tokens += usage.total_tokens;
         for (category, tokens) in &usage.token_usage_by_category {
             *entry
-                .byok_token_usage_by_category
+                .custom_endpoint_token_usage_by_category
                 .entry(category.clone())
                 .or_default() += *tokens;
         }
