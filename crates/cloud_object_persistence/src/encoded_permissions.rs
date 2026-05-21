@@ -52,7 +52,8 @@ pub fn encode_guests(guests: &[CloudObjectGuest]) -> anyhow::Result<Vec<u8>> {
     Ok(bincode::serialize(&persisted_guests)?)
 }
 
-/// Database representation of an object guest.
+/// Database representation of an object guest. These are [`bincode`]-serialized to support storing
+/// an arbitrarily-long guest list.
 #[derive(Serialize, Deserialize)]
 struct PersistedGuest {
     subject: PersistedSubject,
@@ -60,7 +61,8 @@ struct PersistedGuest {
     source: Option<ServerObjectContainer>,
 }
 
-/// Database representation of a guest subject.
+/// Database representation of a guest subject. This is restricted compared to the [`Subject`] type
+/// since not all subjects are persisted.
 #[derive(Serialize, Deserialize)]
 enum PersistedSubject {
     User { firebase_uid: String },
@@ -97,7 +99,8 @@ impl PersistedSubject {
         }
     }
 
-    /// Convert a [`Subject`] into a guest subject type.
+    /// Convert a [`Subject`] into a guest subject type. This is only supported for subjects that
+    /// may be direct object guests.
     pub fn try_from_subject(subject: &Subject) -> anyhow::Result<Self> {
         match subject {
             Subject::User(user_kind) => match user_kind {
@@ -105,6 +108,7 @@ impl PersistedSubject {
                     firebase_uid: user_uid.to_string(),
                 }),
                 UserKind::SharedSessionParticipant(_) => {
+                    // Shared sessions are transient, so we don't persist their ACLs to SQLite.
                     Err(anyhow!("Session-sharing participants not supported"))
                 }
             },
@@ -116,10 +120,14 @@ impl PersistedSubject {
                     team_uid: *team_uid,
                 }),
                 TeamKind::SharedSessionTeam { .. } => {
+                    // Shared sessions are transient, so we don't persist their ACLs to SQLite.
                     Err(anyhow!("Session-sharing teams not supported"))
                 }
             },
-            Subject::AnyoneWithLink(_) => Err(anyhow!("Anyone with the link not supported")),
+            Subject::AnyoneWithLink(_) => {
+                // Link sharing is persisted separately in the schema.
+                Err(anyhow!("Anyone with the link not supported"))
+            }
         }
     }
 }
@@ -173,8 +181,8 @@ mod tests {
     lazy_static! {
         /// By construction, [`CloudObjectGuest`] only accepts `'static`-lifetime [`Subject`]s.
         ///
-        /// In most cases, this would prevent persisting a shared session subject, but this test
-        /// works around it for completeness.
+        /// In most cases, this would prevent persisting a shared session subject, but we work around
+        /// it here for completeness;
         static ref PROFILE_DATA: ProfileData = ProfileData {
             firebase_uid: "2YP93GScglXJMdEr2Id12dI7HCG3".to_string(),
             display_name: "Some User".to_string(),
