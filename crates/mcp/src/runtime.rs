@@ -1,3 +1,10 @@
+//! Capability-gating helpers used during MCP server startup.
+//!
+//! Each `query_*_for` function pairs a capability check with the actual list
+//! call from rmcp, gating the call on advertisement and failing soft on errors.
+//! They take the list call as a closure so unit tests can drive the gate-and-
+//! fail-soft control flow with a fake `RunningService` substitute.
+
 use std::collections::HashMap;
 use std::future::Future;
 
@@ -446,6 +453,8 @@ async fn determine_transport(
                 ));
             };
 
+            // Go through the OAuth flow to get an authenticated client.
+            // This will first attempt to use cached credentials before starting interactive OAuth.
             let client = crate::oauth::make_authenticated_client(&server_name, url, auth_context)
                 .await
                 .map_err(rmcp::RmcpError::transport_creation::<ReqwestHttpTransport>)?;
@@ -644,7 +653,9 @@ mod tests {
 
     use super::{query_resources_for, query_tools_for, should_query_resources, should_query_tools};
 
-    /// Builds `ServerCapabilities` with selected capability flags toggled on.
+    /// Build a `ServerCapabilities` with selected capability flags toggled on.
+    /// Each `Some(default)` mirrors how rmcp deserializes a capability the
+    /// server advertised with no inner flags set.
     fn caps(tools: bool, resources: bool) -> ServerCapabilities {
         match (tools, resources) {
             (true, true) => ServerCapabilities::builder()
@@ -674,7 +685,10 @@ mod tests {
         .expect("Resource deserialization")
     }
 
-    /// Regression test for warpdotdev/warp#6798.
+    /// Regression test for warpdotdev/warp#6798: each capability is queried
+    /// independently. Previously, asymmetric handling could cause `tools/list`
+    /// to be skipped when a server advertised both `tools` and `resources`,
+    /// resulting in "No tools available" even though the server had tools.
     #[test]
     fn each_capability_is_queried_independently() {
         for has_tools in [false, true] {
@@ -696,7 +710,9 @@ mod tests {
         assert!(!should_query_resources(None));
     }
 
-    /// Skips `tools/list` when `tools` is not advertised.
+    /// When `tools` is not advertised, the helper must skip the list call so
+    /// we don't waste a round trip and pollute the wire log with a request
+    /// that's destined to return `METHOD_NOT_FOUND`.
     #[tokio::test]
     async fn query_tools_for_skips_listing_when_capability_not_advertised() {
         let calls = Arc::new(AtomicUsize::new(0));
@@ -758,7 +774,11 @@ mod tests {
         assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 
-    /// Fails soft when `tools/list` sees a transport error.
+    /// **The fail-soft test the bug ticket implicitly demands.** Transport-
+    /// closed errors must not abort server startup; the helper must log and
+    /// return an empty vec. This is the regression-protector for #6798's
+    /// underlying asymmetry — if anyone re-introduces a `return Err(...)` here,
+    /// this test fails.
     #[tokio::test]
     async fn query_tools_for_returns_empty_on_transport_error() {
         let c = caps(true, false);
@@ -769,7 +789,9 @@ mod tests {
         assert!(result.is_empty());
     }
 
-    /// Fails soft when `tools/list` returns an MCP protocol error.
+    /// MCP-protocol errors (e.g. METHOD_NOT_FOUND from a misbehaving server
+    /// that advertised the capability but rejects the call) also fail soft,
+    /// so the rest of the server surface still comes up.
     #[tokio::test]
     async fn query_tools_for_returns_empty_on_mcp_error() {
         let c = caps(true, false);

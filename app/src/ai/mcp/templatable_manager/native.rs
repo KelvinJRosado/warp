@@ -133,8 +133,10 @@ impl TemplatableMCPServerManager {
     /// Handles an incoming OAuth callback URL.
     ///
     /// Routes the callback to the correct in-flight OAuth flow using the `state` query
-    /// parameter that rmcp embedded in the authorization URL.
+    /// parameter (the CSRF token that rmcp embedded in the authorization URL). This avoids
+    /// encoding routing data in the redirect URI, keeping it RFC 6749 §3.1.2.2 compliant.
     pub fn handle_oauth_callback(&mut self, url: &Url) -> anyhow::Result<()> {
+        // Ensure the URL has the expected path
         if url.path() != "/oauth2callback" {
             anyhow::bail!(
                 "Invalid OAuth callback path: expected '/oauth2callback', got '{}'",
