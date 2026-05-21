@@ -4,9 +4,9 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct GithubRepo {
-    /// Repository owner, for example "warpdotdev".
+    /// Repository owner (e.g. "warpdotdev")
     pub owner: String,
-    /// Repository name, for example "warp-internal".
+    /// Repository name (e.g. "warp-internal")
     pub repo: String,
 }
 
@@ -69,19 +69,19 @@ impl ProvidersConfig {
 /// An AmbientAgentEnvironment represents an environment that we would run a Warp agent in.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct AmbientAgentEnvironment {
-    /// Environment name.
+    /// Environment name
     #[serde(default)]
     pub name: String,
-    /// Optional description of the environment, up to 240 characters.
+    /// Optional description of the environment (max 240 characters)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
-    /// List of GitHub repositories.
+    /// List of GitHub repositories
     #[serde(default)]
     pub github_repos: Vec<GithubRepo>,
-    /// Base image specification.
+    /// Base image specification
     #[serde(flatten)]
     pub base_image: BaseImage,
-    /// List of setup commands to run after cloning.
+    /// List of setup commands to run after cloning
     #[serde(default)]
     pub setup_commands: Vec<String>,
     /// Optional cloud provider configurations for automatic auth.
