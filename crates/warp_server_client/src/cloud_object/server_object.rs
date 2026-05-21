@@ -19,7 +19,8 @@ pub enum ConflictStatus<T> {
 }
 
 impl<T> ConflictStatus<T> {
-    /// Returns whether there is a conflict when callers do not need the conflict details.
+    /// Utility function that allows for a more ergonomic way of figuring out whether there is a
+    /// conflict (for cases where we don't care about the conflict details).
     pub fn has_conflicts(&self) -> bool {
         matches!(self, ConflictStatus::ConflictingChanges { .. })
     }
@@ -31,15 +32,17 @@ pub trait ServerObjectModel: Debug + Clone + Send + Sync + 'static {
     fn object_type(&self) -> ObjectType;
 }
 
-/// Common trait for server objects that allows callers to use them as trait objects.
+/// Common trait for server objects that allows us to use them as trait objects
+/// and downcast to concrete types when needed.
 pub trait ServerObject: Debug + Send + Sync {
-    /// Returns the object type of this server object.
+    /// Returns the object type of this server object
     fn object_type(&self) -> ObjectType;
 
-    /// Returns this object as a ref to the Any type for downcasting.
+    /// Returns this object as a ref to the Any type.  Needed for typecasts.
     fn as_any(&self) -> &dyn Any;
 
     /// Returns the trait object as a concrete type reference by downcasting it.
+    /// Returns None if the downcast fails.
     fn as_concrete_type<K, M>(
         server_object: &dyn ServerObject,
     ) -> Option<&GenericServerObject<K, M>>
@@ -54,10 +57,14 @@ pub trait ServerObject: Debug + Send + Sync {
     }
 
     /// Returns a cloned boxed version of this server object.
+    /// Note that we can't force the ServerObject trait to derive from Cloned
+    /// directly because that would make the trait not object safe.  This
+    /// is a workaround.
     fn clone_box(&self) -> Box<dyn ServerObject>;
 }
 
-/// An object that maps directly to the data returned from the server for a given model type.
+/// An object that maps directly to the data returned from the server
+/// for a given model and id type.
 pub struct GenericServerObject<K, M> {
     pub id: SyncId,
     pub model: M,
