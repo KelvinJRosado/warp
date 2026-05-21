@@ -116,7 +116,7 @@ After you push changes that address Oz's feedback, comment `/oz-review` on the P
 
 ### PRs opened without a linked issue
 
-We ask that PRs start from an issue discussion. That's where problems get scoped, [readiness labels](#readiness-labels) get applied, and features go through a [spec phase](#opening-a-spec-pr) before any code is written. See the [Contribution Flow](#contribution-flow) for the full picture.
+We ask that PRs start from an issue discussion. That's where problems get scoped, [readiness labels](#readiness-labels) get applied, and some features go through a [spec phase](#opening-a-spec-pr) before any code is written. See the [Contribution Flow](#contribution-flow) for the full picture.
 
 That said, if you open a PR ahead of the standard issue workflow, here's what to do:
 
