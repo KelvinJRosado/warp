@@ -2,17 +2,24 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 
 use ai::skills::{ParsedSkill, SkillProvider, SkillScope};
-use repo_metadata::entry::{DirectoryEntry, Entry, FileMetadata};
+use remote_server::proto::{file_context_proto, FileContextProto};
+use repo_metadata::entry::{DirectoryEntry, Entry};
 use repo_metadata::file_tree_store::FileTreeState;
-use repo_metadata::repositories::DetectedRepositories;
 use repo_metadata::{
-    DirectoryWatcher, RepoMetadataModel, RepositoryIdentifier, RepositoryUpdate, TargetFile,
+    repositories::DetectedRepositories, DirectoryWatcher, RepoMetadataModel, RepositoryIdentifier,
+    RepositoryUpdate, TargetFile,
 };
 use tempfile::TempDir;
-use warp_util::standardized_path::StandardizedPath;
+use warp_util::{
+    host_id::HostId, local_or_remote_path::LocalOrRemotePath, remote_path::RemotePath,
+    standardized_path::StandardizedPath,
+};
 use warpui::App;
 
-use super::SkillWatcher;
+use super::{
+    parse_remote_skill_file_contexts, remote_skill_read_request, SkillWatcher,
+    REMOTE_SKILL_MAX_BATCH_BYTES, REMOTE_SKILL_MAX_FILE_BYTES,
+};
 use crate::ai::skills::skill_manager::SkillWatcherEvent;
 
 /// Helper function for creating a single skill file
@@ -35,7 +42,7 @@ description: {}
     let line_range_start = skill_content.clone().lines().count() - content.lines().count() + 1;
     let line_range_end = skill_content.clone().lines().count() + 1;
     ParsedSkill {
-        path: skill_file_path,
+        path: LocalOrRemotePath::Local(skill_file_path),
         name: name.to_string(),
         description: description.to_string(),
         content: skill_content.clone(),
@@ -43,6 +50,193 @@ description: {}
         provider: SkillProvider::Agents,
         scope: SkillScope::Project,
     }
+}
+
+fn remote_skill_path(host_id: &HostId, name: &str) -> LocalOrRemotePath {
+    LocalOrRemotePath::Remote(RemotePath::new(
+        host_id.clone(),
+        StandardizedPath::try_new(format!("/repo/.agents/skills/{name}/SKILL.md").as_str())
+            .unwrap(),
+    ))
+}
+
+fn remote_skill_content(name: &str, description: &str, body: &str) -> String {
+    format!(
+        r#"---
+name: {name}
+description: {description}
+---
+{body}
+"#
+    )
+}
+
+fn remote_skill_file_context(path: &LocalOrRemotePath, content: &str) -> FileContextProto {
+    let LocalOrRemotePath::Remote(remote) = path else {
+        panic!("Expected a remote skill path");
+    };
+
+    FileContextProto {
+        file_name: remote.path.as_str().to_string(),
+        content: Some(file_context_proto::Content::TextContent(
+            content.to_string(),
+        )),
+        line_range_start: None,
+        line_range_end: None,
+        last_modified_epoch_millis: None,
+        line_count: content.lines().count() as u32,
+    }
+}
+
+#[test]
+fn parse_remote_skill_file_contexts_matches_reordered_responses_by_path() {
+    let host = HostId::new("test-host".to_string());
+    let first_path = remote_skill_path(&host, "first");
+    let second_path = remote_skill_path(&host, "second");
+    let first_content = remote_skill_content("first", "First skill", "First body");
+    let second_content = remote_skill_content("second", "Second skill", "Second body");
+
+    let skills = parse_remote_skill_file_contexts(
+        vec![first_path.clone(), second_path.clone()],
+        vec![
+            remote_skill_file_context(&second_path, &second_content),
+            remote_skill_file_context(&first_path, &first_content),
+        ],
+    );
+
+    assert_eq!(skills.len(), 2);
+    assert_eq!(skills[0].path, first_path);
+    assert_eq!(skills[0].name, "first");
+    assert_eq!(skills[0].content, first_content);
+    assert_eq!(skills[1].path, second_path);
+    assert_eq!(skills[1].name, "second");
+    assert_eq!(skills[1].content, second_content);
+}
+
+#[test]
+fn parse_remote_skill_file_contexts_keeps_paths_aligned_after_missing_reads() {
+    let host = HostId::new("test-host".to_string());
+    let missing_path = remote_skill_path(&host, "missing");
+    let present_path = remote_skill_path(&host, "present");
+    let present_content = remote_skill_content("present", "Present skill", "Present body");
+
+    let skills = parse_remote_skill_file_contexts(
+        vec![missing_path, present_path.clone()],
+        vec![remote_skill_file_context(&present_path, &present_content)],
+    );
+
+    assert_eq!(skills.len(), 1);
+    assert_eq!(skills[0].path, present_path);
+    assert_eq!(skills[0].name, "present");
+    assert_eq!(skills[0].content, present_content);
+}
+
+#[test]
+fn remote_skill_read_request_sets_bounded_read_budget() {
+    let host = HostId::new("test-host".to_string());
+    let first_path = remote_skill_path(&host, "first");
+    let second_path = remote_skill_path(&host, "second");
+
+    let request = remote_skill_read_request(&[first_path.clone(), second_path.clone()]);
+
+    assert_eq!(request.max_file_bytes, Some(REMOTE_SKILL_MAX_FILE_BYTES));
+    assert_eq!(request.max_batch_bytes, Some(REMOTE_SKILL_MAX_BATCH_BYTES));
+    assert_eq!(request.files.len(), 2);
+    let LocalOrRemotePath::Remote(first_remote) = first_path else {
+        panic!("Expected remote path");
+    };
+    let LocalOrRemotePath::Remote(second_remote) = second_path else {
+        panic!("Expected remote path");
+    };
+    assert_eq!(request.files[0].path, first_remote.path.as_str());
+    assert_eq!(request.files[1].path, second_remote.path.as_str());
+}
+
+#[test]
+fn update_remote_skill_path_cache_emits_deleted_stale_paths() {
+    let (tx, rx) = async_channel::unbounded();
+
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| DetectedRepositories::default());
+        app.add_singleton_model(RepoMetadataModel::new);
+        let skill_watcher_handle = app.add_model(|ctx| SkillWatcher::new_for_testing(ctx, tx));
+
+        let host = HostId::new("test-host".to_string());
+        let repo_id = RepositoryIdentifier::Remote(RemotePath::new(
+            host.clone(),
+            StandardizedPath::try_new("/repo").unwrap(),
+        ));
+        let first_path = remote_skill_path(&host, "first");
+        let second_path = remote_skill_path(&host, "second");
+
+        skill_watcher_handle.update(&mut app, |watcher, _| {
+            watcher.update_remote_skill_path_cache(
+                &repo_id,
+                &[first_path.clone(), second_path.clone()],
+            );
+        });
+        assert!(rx.try_recv().is_err());
+
+        skill_watcher_handle.update(&mut app, |watcher, _| {
+            watcher.update_remote_skill_path_cache(&repo_id, std::slice::from_ref(&second_path));
+        });
+
+        assert_eq!(
+            rx.recv().await.unwrap(),
+            SkillWatcherEvent::SkillsDeleted {
+                paths: vec![first_path]
+            }
+        );
+
+        skill_watcher_handle.read(&app, |watcher, _| {
+            assert_eq!(
+                watcher.remote_skill_paths_by_repo.get(&repo_id),
+                Some(&HashSet::from([second_path]))
+            );
+        });
+    });
+}
+
+#[test]
+fn handle_repository_removed_deletes_cached_remote_skill_paths_and_repo_root() {
+    let (tx, rx) = async_channel::unbounded();
+
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| DetectedRepositories::default());
+        app.add_singleton_model(RepoMetadataModel::new);
+        let skill_watcher_handle = app.add_model(|ctx| SkillWatcher::new_for_testing(ctx, tx));
+
+        let host = HostId::new("test-host".to_string());
+        let repo_root = RemotePath::new(host.clone(), StandardizedPath::try_new("/repo").unwrap());
+        let repo_id = RepositoryIdentifier::Remote(repo_root.clone());
+        let first_path = remote_skill_path(&host, "first");
+        let second_path = remote_skill_path(&host, "second");
+
+        skill_watcher_handle.update(&mut app, |watcher, _| {
+            watcher.update_remote_skill_path_cache(
+                &repo_id,
+                &[first_path.clone(), second_path.clone()],
+            );
+            watcher.handle_repository_removed(&repo_id);
+        });
+
+        let SkillWatcherEvent::SkillsDeleted { mut paths } = rx.recv().await.unwrap() else {
+            panic!("Expected SkillsDeleted event");
+        };
+        paths.sort_by_key(LocalOrRemotePath::display_path);
+
+        let mut expected = vec![
+            first_path,
+            second_path,
+            LocalOrRemotePath::Remote(repo_root),
+        ];
+        expected.sort_by_key(LocalOrRemotePath::display_path);
+        assert_eq!(paths, expected);
+
+        skill_watcher_handle.read(&app, |watcher, _| {
+            assert!(!watcher.remote_skill_paths_by_repo.contains_key(&repo_id));
+        });
+    });
 }
 
 // ============================================================================
@@ -63,7 +257,10 @@ fn test_handle_repository_update_single_skill_added() {
         let skill = create_skill_file(&temp_dir, "test", "Test skill", "Test content");
 
         let update = RepositoryUpdate {
-            added: HashSet::from([TargetFile::new(skill.path.clone(), false)]),
+            added: HashSet::from([TargetFile::new(
+                skill.path.to_local_path().unwrap().to_path_buf(),
+                false,
+            )]),
             modified: HashSet::new(),
             deleted: HashSet::new(),
             moved: HashMap::new(),
@@ -88,7 +285,7 @@ fn test_handle_repository_update_single_skill_added() {
 
 #[test]
 #[cfg(unix)]
-fn test_refresh_project_skills_for_repo_loads_symlinked_project_skill_directory() {
+fn test_scan_repository_for_skills_loads_symlinked_project_skill_directory() {
     let (tx, rx) = async_channel::unbounded();
 
     App::test((), |mut app| async move {
@@ -109,11 +306,14 @@ fn test_refresh_project_skills_for_repo_loads_symlinked_project_skill_directory(
         let symlink_parent = repo.join(".agents/skills");
         fs::create_dir_all(&symlink_parent).unwrap();
         let symlink_skill_dir = symlink_parent.join("linked-skill");
-        std::os::unix::fs::symlink(target_skill.path.parent().unwrap(), &symlink_skill_dir)
-            .unwrap();
+        std::os::unix::fs::symlink(
+            target_skill.path.to_local_path().unwrap().parent().unwrap(),
+            &symlink_skill_dir,
+        )
+        .unwrap();
 
         let mut expected_skill = target_skill;
-        expected_skill.path = symlink_skill_dir.join("SKILL.md");
+        expected_skill.path = LocalOrRemotePath::Local(symlink_skill_dir.join("SKILL.md"));
 
         let repo_id = RepositoryIdentifier::try_local(&repo).unwrap();
         let repo_key = StandardizedPath::try_from_local(&repo).unwrap();
@@ -122,7 +322,7 @@ fn test_refresh_project_skills_for_repo_loads_symlinked_project_skill_directory(
         });
 
         skill_watcher_handle.update(&mut app, |skill_watcher, ctx| {
-            skill_watcher.refresh_project_skills_for_repo(&repo_id, ctx);
+            skill_watcher.scan_repository_for_skills(&repo_id, ctx);
         });
 
         assert_eq!(
@@ -149,7 +349,10 @@ fn test_handle_repository_update_skill_modified() {
 
         let update = RepositoryUpdate {
             added: HashSet::new(),
-            modified: HashSet::from([TargetFile::new(skill.path.clone(), false)]),
+            modified: HashSet::from([TargetFile::new(
+                skill.path.to_local_path().unwrap().to_path_buf(),
+                false,
+            )]),
             deleted: HashSet::new(),
             moved: HashMap::new(),
             commit_updated: false,
@@ -187,7 +390,10 @@ fn test_handle_repository_update_skill_deleted() {
         let update = RepositoryUpdate {
             added: HashSet::new(),
             modified: HashSet::new(),
-            deleted: HashSet::from([TargetFile::new(skill.path.clone(), false)]),
+            deleted: HashSet::from([TargetFile::new(
+                skill.path.to_local_path().unwrap().to_path_buf(),
+                false,
+            )]),
             moved: HashMap::new(),
             commit_updated: false,
             index_lock_detected: false,
@@ -226,8 +432,8 @@ fn test_handle_repository_update_multiple_skills_deleted() {
             added: HashSet::new(),
             modified: HashSet::new(),
             deleted: HashSet::from([
-                TargetFile::new(skill_a.path.clone(), false),
-                TargetFile::new(skill_b.path.clone(), false),
+                TargetFile::new(skill_a.path.to_local_path().unwrap().to_path_buf(), false),
+                TargetFile::new(skill_b.path.to_local_path().unwrap().to_path_buf(), false),
             ]),
             moved: HashMap::new(),
             commit_updated: false,
@@ -243,9 +449,9 @@ fn test_handle_repository_update_multiple_skills_deleted() {
         let SkillWatcherEvent::SkillsDeleted { mut paths } = event else {
             panic!("Expected SkillsDeleted event");
         };
-        paths.sort();
+        paths.sort_by_key(LocalOrRemotePath::display_path);
         let mut expected = vec![skill_a.path, skill_b.path];
-        expected.sort();
+        expected.sort_by_key(LocalOrRemotePath::display_path);
         assert_eq!(paths, expected);
     });
 }
@@ -270,8 +476,8 @@ fn test_handle_repository_update_skill_moved() {
             modified: HashSet::new(),
             deleted: HashSet::new(),
             moved: HashMap::from([(
-                TargetFile::new(new_skill.path.clone(), false),
-                TargetFile::new(old_skill.path.clone(), false),
+                TargetFile::new(new_skill.path.to_local_path().unwrap().to_path_buf(), false),
+                TargetFile::new(old_skill.path.to_local_path().unwrap().to_path_buf(), false),
             )]),
             commit_updated: false,
             index_lock_detected: false,
@@ -301,21 +507,39 @@ fn test_handle_repository_update_skill_moved() {
 }
 
 // ============================================================================
-// Tests for project skill refreshes
+// Tests for handle_repository_update - directory addition
 // ============================================================================
 
+/// When a non-skill directory is added within a known repo, `handle_repository_update` should
+/// queue the repo root in `queued_project_directory_creations` for a later skill scan.
 #[test]
-fn test_handle_repository_update_non_skill_directory_added_does_not_emit_project_event() {
-    let (tx, rx) = async_channel::unbounded();
-
+fn test_handle_repository_update_non_skill_directory_added_queues_project_directory() {
     App::test((), |mut app| async move {
         app.add_singleton_model(DirectoryWatcher::new_for_testing);
-        app.add_singleton_model(|_| DetectedRepositories::default());
+        let detected_repos_handle = app.add_singleton_model(|_| DetectedRepositories::default());
         app.add_singleton_model(RepoMetadataModel::new);
+        let (tx, _rx) = async_channel::unbounded();
         let skill_watcher_handle = app.add_model(|ctx| SkillWatcher::new_for_testing(ctx, tx));
 
         let temp_dir = TempDir::new().unwrap();
-        let new_dir = temp_dir.path().join("new-feature");
+        let canonical_repo = StandardizedPath::from_local_canonicalized(temp_dir.path()).unwrap();
+
+        // Register the temp dir as a known repo root so get_root_for_path resolves it.
+        detected_repos_handle.update(&mut app, |repos, _| {
+            repos.insert_test_repo_root(canonical_repo.clone());
+        });
+
+        // Seed watched_repos so get_watched_repo_path can resolve the temp dir to this root.
+        // Use the canonicalized path to match what CanonicalizedPath::try_from resolves on macOS
+        // (where /var is a symlink to /private/var).
+        skill_watcher_handle.update(&mut app, |watcher, _| {
+            watcher
+                .watched_repos
+                .insert(canonical_repo.to_local_path().unwrap());
+        });
+
+        // The added path must exist on disk for CanonicalizedPath resolution.
+        let new_dir = canonical_repo.to_local_path().unwrap().join("new-feature");
         fs::create_dir_all(&new_dir).unwrap();
 
         let update = RepositoryUpdate {
@@ -332,43 +556,103 @@ fn test_handle_repository_update_non_skill_directory_added_does_not_emit_project
             skill_watcher.handle_repository_update(&update, ctx);
         });
 
-        assert!(rx.try_recv().is_err());
+        // The repo root should be queued for a skill scan.
+        skill_watcher_handle.read(&app, |watcher, _| {
+            assert_eq!(watcher.queued_project_directory_creations.len(), 1);
+            assert_eq!(
+                watcher.queued_project_directory_creations[0].path,
+                canonical_repo.to_local_path().unwrap()
+            );
+        });
     });
 }
 
-fn project_state(repo: &std::path::Path, skill: Option<&ParsedSkill>) -> FileTreeState {
-    let children = if let Some(skill) = skill {
-        let skill_file = Entry::File(FileMetadata::new(skill.path.clone(), false));
-        let skill_dir = Entry::Directory(DirectoryEntry {
-            path: StandardizedPath::try_from_local(skill.path.parent().unwrap()).unwrap(),
-            children: vec![skill_file],
-            ignored: false,
-            loaded: true,
-        });
-        let skills_dir = Entry::Directory(DirectoryEntry {
-            path: StandardizedPath::try_from_local(&repo.join(".agents/skills")).unwrap(),
-            children: vec![skill_dir],
-            ignored: false,
-            loaded: true,
-        });
-        let agents_dir = Entry::Directory(DirectoryEntry {
-            path: StandardizedPath::try_from_local(&repo.join(".agents")).unwrap(),
-            children: vec![skills_dir],
-            ignored: false,
-            loaded: true,
-        });
-        vec![agents_dir]
-    } else {
-        Vec::new()
-    };
+/// A modified non-skill file in a known repo should NOT queue anything in
+/// `queued_project_directory_creations`; only directory additions can introduce new skill files.
+#[test]
+fn test_handle_repository_update_non_skill_file_modified_in_repo_does_not_queue_project_directory()
+{
+    App::test((), |mut app| async move {
+        app.add_singleton_model(DirectoryWatcher::new_for_testing);
+        let detected_repos_handle = app.add_singleton_model(|_| DetectedRepositories::default());
+        app.add_singleton_model(RepoMetadataModel::new);
+        let (tx, _rx) = async_channel::unbounded();
+        let skill_watcher_handle = app.add_model(|ctx| SkillWatcher::new_for_testing(ctx, tx));
 
-    let root = Entry::Directory(DirectoryEntry {
-        path: StandardizedPath::try_from_local(repo).unwrap(),
-        children,
-        ignored: false,
-        loaded: true,
+        let temp_dir = TempDir::new().unwrap();
+        let canonical_repo = StandardizedPath::from_local_canonicalized(temp_dir.path()).unwrap();
+
+        detected_repos_handle.update(&mut app, |repos, _| {
+            repos.insert_test_repo_root(canonical_repo.clone());
+        });
+
+        // Create the file on disk so CanonicalizedPath resolution succeeds.
+        let readme = temp_dir.path().join("README.md");
+        fs::write(&readme, "# Project").unwrap();
+
+        let update = RepositoryUpdate {
+            added: HashSet::new(),
+            modified: HashSet::from([TargetFile::new(readme, false)]),
+            deleted: HashSet::new(),
+            moved: HashMap::new(),
+            commit_updated: false,
+            index_lock_detected: false,
+            remote_ref_updated: false,
+        };
+
+        skill_watcher_handle.update(&mut app, |skill_watcher, ctx| {
+            skill_watcher.handle_repository_update(&update, ctx);
+        });
+
+        // Modifying a plain file must NOT queue a project directory scan.
+        skill_watcher_handle.read(&app, |watcher, _| {
+            assert_eq!(watcher.queued_project_directory_creations.len(), 0);
+        });
     });
-    FileTreeState::new(root, Vec::new(), None)
+}
+
+/// When a regular (non-skill) file is added within a known repo, `handle_repository_update`
+/// should NOT queue anything in `queued_project_directory_creations` because only directory
+/// additions may introduce new skill files.
+#[test]
+fn test_handle_repository_update_non_skill_file_added_does_not_queue_project_directory() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(DirectoryWatcher::new_for_testing);
+        let detected_repos_handle = app.add_singleton_model(|_| DetectedRepositories::default());
+        app.add_singleton_model(RepoMetadataModel::new);
+        let (tx, _rx) = async_channel::unbounded();
+        let skill_watcher_handle = app.add_model(|ctx| SkillWatcher::new_for_testing(ctx, tx));
+
+        let temp_dir = TempDir::new().unwrap();
+        let canonical_repo = StandardizedPath::from_local_canonicalized(temp_dir.path()).unwrap();
+
+        detected_repos_handle.update(&mut app, |repos, _| {
+            repos.insert_test_repo_root(canonical_repo.clone());
+        });
+
+        // Create a regular file (not a directory, not a skill file) on disk.
+        let readme = temp_dir.path().join("README.md");
+        fs::write(&readme, "# Project").unwrap();
+
+        let update = RepositoryUpdate {
+            added: HashSet::from([TargetFile::new(readme, false)]),
+            modified: HashSet::new(),
+            deleted: HashSet::new(),
+            moved: HashMap::new(),
+            commit_updated: false,
+            index_lock_detected: false,
+            remote_ref_updated: false,
+        };
+
+        skill_watcher_handle.update(&mut app, |skill_watcher, ctx| {
+            skill_watcher.handle_repository_update(&update, ctx);
+        });
+
+        // A plain file being added must NOT queue a project directory scan.
+        skill_watcher_handle.read(&app, |watcher, _| {
+            assert_eq!(watcher.queued_project_directory_creations.len(), 0);
+        });
+    });
 }
 
 fn project_provider_state(repo: &std::path::Path) -> FileTreeState {
@@ -393,48 +677,6 @@ fn project_provider_state(repo: &std::path::Path) -> FileTreeState {
     FileTreeState::new(root, Vec::new(), None)
 }
 
-#[test]
-fn test_refresh_project_skills_for_repo_removes_missing_project_skill_paths() {
-    let (tx, rx) = async_channel::unbounded();
-
-    App::test((), |mut app| async move {
-        app.add_singleton_model(DirectoryWatcher::new_for_testing);
-        app.add_singleton_model(|_| DetectedRepositories::default());
-        let repo_metadata_handle = app.add_singleton_model(RepoMetadataModel::new);
-        let skill_watcher_handle = app.add_model(|ctx| SkillWatcher::new_for_testing(ctx, tx));
-
-        let temp_dir = TempDir::new().unwrap();
-        let skill = create_skill_file(&temp_dir, "test", "Test skill", "Test content");
-        let repo = temp_dir.path().to_path_buf();
-        let repo_id = RepositoryIdentifier::try_local(&repo).unwrap();
-        let repo_key = StandardizedPath::try_from_local(&repo).unwrap();
-
-        repo_metadata_handle.update(&mut app, |model, ctx| {
-            model.insert_test_state(repo_key.clone(), project_state(&repo, Some(&skill)), ctx);
-        });
-        skill_watcher_handle.update(&mut app, |skill_watcher, ctx| {
-            skill_watcher.refresh_project_skills_for_repo(&repo_id, ctx);
-        });
-
-        assert_eq!(
-            rx.recv().await.unwrap(),
-            SkillWatcherEvent::SkillsAdded {
-                skills: vec![skill.clone()]
-            }
-        );
-
-        repo_metadata_handle.update(&mut app, |model, ctx| {
-            model.insert_test_state(repo_key, project_state(&repo, None), ctx);
-        });
-        skill_watcher_handle.update(&mut app, |skill_watcher, ctx| {
-            skill_watcher.refresh_project_skills_for_repo(&repo_id, ctx);
-        });
-
-        assert_eq!(
-            rx.recv().await.unwrap(),
-            SkillWatcherEvent::SkillsDeleted {
-                paths: vec![skill.path]
-            }
-        );
-    });
-}
+// ============================================================================
+// Tests for handle_queued_project_directory_creations
+// ============================================================================

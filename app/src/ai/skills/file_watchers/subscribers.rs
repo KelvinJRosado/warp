@@ -11,7 +11,7 @@ use warpui::ModelContext;
 pub enum SkillRepositoryMessage {
     /// Initial scan of a home skills directory (e.g., `~/.agents`).
     HomeInitialScan { skills: Vec<ParsedSkill> },
-    /// Incremental file system updates from a home provider directory.
+    /// Incremental file system updates from a home provider directory or local project repo.
     RepositoryUpdate { update: RepositoryUpdate },
     /// File changes detected in a resolved symlink target directory.
     SymlinkTargetUpdate { update: RepositoryUpdate },
@@ -46,6 +46,40 @@ impl RepositorySubscriber for SymlinkSkillSubscriber {
         Box::pin(async move {
             let _ = tx
                 .send(SkillRepositoryMessage::SymlinkTargetUpdate { update })
+                .await;
+        })
+    }
+}
+
+/// A repository subscriber for local project repositories.
+///
+/// The initial project skill scan comes from `RepoMetadataModel`, so this subscriber only forwards
+/// incremental filesystem updates after a repository is already being watched.
+pub struct ProjectSkillSubscriber {
+    pub message_tx: Sender<SkillRepositoryMessage>,
+}
+
+impl RepositorySubscriber for ProjectSkillSubscriber {
+    fn on_scan(
+        &mut self,
+        _repository: &Repository,
+        _ctx: &mut ModelContext<Repository>,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'static>> {
+        Box::pin(async {})
+    }
+
+    fn on_files_updated(
+        &mut self,
+        _repository: &Repository,
+        update: &RepositoryUpdate,
+        _ctx: &mut ModelContext<Repository>,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'static>> {
+        let tx = self.message_tx.clone();
+        let update = update.clone();
+
+        Box::pin(async move {
+            let _ = tx
+                .send(SkillRepositoryMessage::RepositoryUpdate { update })
                 .await;
         })
     }
