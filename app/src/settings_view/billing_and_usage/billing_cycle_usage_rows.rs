@@ -345,7 +345,13 @@ fn build_rows(
                 SourceFilter::All,
             )];
             if shows_team_section {
-                rows.push(MemberUsageRow::for_other_members(entries));
+                let other_row = MemberUsageRow::for_other_members(entries);
+                // only show the other users' usage if there's something useful to show in it...
+                // i.e. for an admin of a 1-user-only team, it doesn't make sense for use to show
+                // "other users: 0" all the time
+                if other_row.total_credits > 0 || workspace.members.len() > 1 {
+                    rows.push(other_row);
+                }
             }
             rows
         }
