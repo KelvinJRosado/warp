@@ -2371,26 +2371,20 @@ impl AgentDriver {
         let (tx, rx) = oneshot::channel();
         let run_exit = IdleTimeoutSender::new(tx);
 
-        // Empty-prompt local-to-cloud handoff: the sandboxed Oz CLI is invoked
-        // with `--skip-initial-turn` because there is no user content to act on
-        // (no prompt, no "continue in the cloud" substitution, no snapshot
-        // rehydration). The worker derives this per-execution from the
-        // execution input and emits `--skip-initial-turn`; the driver reads it
-        // off CLI args at construction and stores it on `self`. Skip the
-        // `StartFromAmbientRunPrompt` dispatch entirely so the LLM does not
-        // hallucinate a turn against an empty user message. The user's first
-        // follow-up arrives via the session sharing protocol as an in-process
-        // `AppendedExchange` on the existing conversation; the history
-        // subscription below cancels the idle timer scheduled here exactly as
-        // it would for any other follow-up turn. We schedule the deferred
-        // `Success` *before* setting up the subscription so the subscription
-        // closure can take ownership of `run_exit`; the shared
-        // `Arc<AtomicUsize>` generation counter inside `IdleTimeoutSender`
-        // means `cancel_idle_timeout` issued from inside the closure correctly
-        // invalidates the timer scheduled here.
-        let is_skip_initial_turn =
+        // Empty-prompt local-to-cloud handoff: skip the initial LLM turn so the
+        // agent doesn't hallucinate against an empty user message. We schedule
+        // the deferred `Success` here, *before* the history subscription below
+        // is wired up; a follow-up `AppendedExchange` cancels this timer via
+        // the shared `Arc<AtomicUsize>` generation counter inside
+        // `IdleTimeoutSender`.
+        let should_skip_initial_turn =
             self.skip_initial_turn && matches!(&task_prompt, AgentRunPrompt::ServerSide { .. });
-        if is_skip_initial_turn {
+        if self.skip_initial_turn && !should_skip_initial_turn {
+            log::warn!(
+                "[DEBUG] skip_initial_turn=true paired with AgentRunPrompt::Local; ignoring skip request"
+            );
+        }
+        if should_skip_initial_turn {
             let restored_conversation_id = self.restored_conversation_id;
             self.terminal_driver.update(ctx, |td, ctx| {
                 td.with_terminal_view(ctx, |terminal, ctx| {
@@ -2724,7 +2718,7 @@ impl AgentDriver {
         // already entered the view, emitted the marker, and scheduled the
         // deferred `Success`; the history subscription will cancel that idle
         // timer on the first follow-up `AppendedExchange`.
-        if !is_skip_initial_turn {
+        if !should_skip_initial_turn {
             // If we restored a conversation from --conversation, use that conversation ID
             // so the prompt is sent as a follow-up to the restored conversation.
             let restored_conversation_id = self.restored_conversation_id;
@@ -2764,14 +2758,8 @@ impl AgentDriver {
                             );
                         }
 
-                        // Emit AmbientSetupPhaseEnded as the canonical "setup phase complete"
-                        // signal so viewers can tear down the Cloud Mode Setup V2 chip and clear
-                        // the pre-first-exchange gate off this marker rather than racing against
-                        // the first AppendedExchange. The legacy AppendedExchange-driven teardowns
-                        // in app/src/terminal/view.rs and
-                        // app/src/terminal/view/ambient_agent/block/setup_command_text.rs are
-                        // kept as a transition fallback for old sharers; both paths are
-                        // idempotent on the viewer side.
+                        // Emit the canonical setup-phase-complete marker so
+                        // viewers can tear down the Cloud Mode Setup V2 chip.
                         terminal
                             .model
                             .lock()

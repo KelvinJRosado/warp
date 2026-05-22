@@ -60,18 +60,21 @@ On the warp-4 side, the relevant client-side architecture is:
 ### 3.2 `build_handoff_spawn_request` does not derive the flag
 `app/src/terminal/view/ambient_agent/model.rs:622-649` — the function decides only the wire-level prompt (per Section 2.4). It does not compute a `skip_initial_turn` value. `spawn_agent` at `model.rs:1111-1139` likewise emits no `skip_initial_turn` value.
 ### 3.3 `AgentRunPrompt::ServerSide` shape
-`app/src/ai/agent_sdk/driver.rs:405-410` — the `ServerSide` variant carries only `skill: Option<ParsedSkill>` and `attachments_dir: Option<String>`. The skip-initial-turn signal is intentionally not part of the prompt variant because the prompt variant must round-trip through `prepare_harness` (which is harness-agnostic) without ferrying a flag that's meaningful only on the Oz harness.
+`app/src/ai/agent_sdk/driver.rs:413-418` — the `ServerSide` variant carries only `skill: Option<ParsedSkill>` and `attachments_dir: Option<String>`. The skip-initial-turn signal is intentionally not part of the prompt variant because the prompt variant must round-trip through `prepare_harness` (which is harness-agnostic) without ferrying a flag that's meaningful only on the Oz harness.
 ### 3.4 `AgentDriverOptions` and `AgentDriver` field
-`app/src/ai/agent_sdk/driver.rs` — `AgentDriverOptions` and `AgentDriver` each carry a `skip_initial_turn: bool` field. The value is sourced from `RunAgentArgs::skip_initial_turn` (which the clap parser populates from `--skip-initial-turn`) by the `build_driver_options_and_task` closure in `mod.rs:855` and threaded into `AgentDriver::new`. The `new_for_test` constructor initializes the field to `false`.
+`app/src/ai/agent_sdk/driver.rs` — `AgentDriverOptions` and `AgentDriver` each carry a `skip_initial_turn: bool` field. The value is sourced from `RunAgentArgs::skip_initial_turn` (which the clap parser populates from `--skip-initial-turn`) by the `build_driver_options_and_task` closure in `mod.rs:875` and threaded into `AgentDriver::new`. The `new_for_test` constructor initializes the field to `false`.
 ### 3.5 Skip-branch gate in `execute_run`
-`app/src/ai/agent_sdk/driver.rs:2410-2411` — the gate is
+`app/src/ai/agent_sdk/driver.rs:2399-2405` — the gate is
 ```rust path=null start=null
-let is_skip_initial_turn =
+let should_skip_initial_turn =
     self.skip_initial_turn && matches!(&task_prompt, AgentRunPrompt::ServerSide { .. });
+if self.skip_initial_turn && !should_skip_initial_turn {
+    log::warn!("[DEBUG] skip_initial_turn=true paired with AgentRunPrompt::Local; ignoring skip request");
+}
 ```
-The `ServerSide` match gates the flag onto the Oz harness path — third-party harnesses always resolve the server-side prompt through `prepare_harness` and ignore the flag by construction. The skip-branch body (enter agent view, emit `AmbientSetupPhaseEnded`, schedule deferred `Success` via `IdleTimeoutSender::complete_with_optional_idle`) is described in Section 4.
+The `ServerSide` match gates the flag onto the Oz harness path — third-party harnesses always resolve the server-side prompt through `prepare_harness` and ignore the flag by construction. The `[DEBUG]` warning fires loudly if a misconfigured caller pairs the flag with a `Local` prompt (silent-wrong is worse than visibly-wrong). The skip-branch body (enter agent view, emit `AmbientSetupPhaseEnded`, schedule deferred `Success` via `IdleTimeoutSender::complete_with_optional_idle`) is described in Section 4.
 ### 3.6 CLI flag
-`crates/warp_cli/src/agent.rs:368-372` — `--skip-initial-turn` is a `requires = "task_id"` boolean flag on `oz agent run`. The CLI parser test at `crates/warp_cli/src/lib_tests.rs:233-252` pins its parsing and constraint.
+`crates/warp_cli/src/agent.rs:368-380` — `--skip-initial-turn` is a hidden boolean flag on `oz agent run` with `requires_all = ["task_id", "idle_on_complete"]`. The `idle_on_complete` requirement pins the worker→driver invariant at the CLI layer: with the initial turn skipped, the driver has nothing to drive a completion event, so without an idle window the process would exit immediately on `Success` before the user's follow-up could arrive. CLI parser tests at `crates/warp_cli/src/lib_tests.rs:232-296` pin parsing and both rejection cases.
 ### Considered alternatives
 - **Storing the decision on the task config snapshot at dispatch time.** Rejected: a single stored decision drifts across executions. A cloud→cloud follow-up that submits a non-empty prompt against the same task would inherit the stamped flag and incorrectly skip the LLM turn. Computing fresh per execution makes the decision reactive to the current execution input and trivially supports future content sources without changes outside `ShouldSkipInitialTurn`.
 - **Deriving the flag client-side and shipping it on `SpawnAgentRequest`.** Rejected for the same reason: the client only sees the first execution, so it has no input to base subsequent executions on. Centralizing on the server keeps the worker, the wire shape, and the driver simple and keeps the policy in one place.
@@ -88,7 +91,7 @@ Every cloud agent run signals "environment setup phase complete" via the `Ordere
 ### 4.5 Viewer event_loop.rs arm
 `app/src/terminal/shared_session/viewer/event_loop.rs` — the `OrderedTerminalEventType::AmbientSetupPhaseEnded` arm flips `BlockList::set_is_executing_oz_environment_startup_commands(false)`, then calls `AmbientAgentViewModel::tear_down_active_setup_command_group` which runs `finish_setup_command_group` + `set_setup_command_group_visibility(false)`. "No active group" is a no-op for idempotency. The arm is path-agnostic — it handles both the skip-initial-turn path and the normal cloud agent path.
 ### 4.6 Non-skip ServerSide marker emission
-`app/src/ai/agent_sdk/driver.rs:2760-2792` `AgentDriver::execute_run` non-skip `AgentRunPrompt::ServerSide` arm: after the existing `terminal.enter_agent_view(None, restored_conversation_id, AgentViewEntryOrigin::Cli, ctx)` call and before the `terminal.ai_controller().update(...)` block that fires `AIAgentInput::StartFromAmbientRunPrompt`, the arm invokes `terminal.model.lock().send_ambient_setup_phase_ended_for_shared_session()`. This mirrors the skip-path emission. The `AgentRunPrompt::Local` arm intentionally does not call the helper — local runs don't have a setup phase.
+`app/src/ai/agent_sdk/driver.rs:2779-2784` `AgentDriver::execute_run` non-skip `AgentRunPrompt::ServerSide` arm: after the existing `terminal.enter_agent_view(None, restored_conversation_id, AgentViewEntryOrigin::Cli, ctx)` call and before the `terminal.ai_controller().update(...)` block that fires `AIAgentInput::StartFromAmbientRunPrompt`, the arm invokes `terminal.model.lock().send_ambient_setup_phase_ended_for_shared_session()`. This mirrors the skip-path emission. The `AgentRunPrompt::Local` arm intentionally does not call the helper — local runs don't have a setup phase.
 ### 4.7 Legacy fallback teardowns
 Two `BlocklistAIHistoryEvent::AppendedExchange`-driven teardowns at `app/src/terminal/view.rs:5496-5507` and `app/src/terminal/view/ambient_agent/block/setup_command_text.rs:119-136` remain as a compatibility fallback for viewers that connect to sharers running pre-feature builds. Both teardowns are idempotent with the `AmbientSetupPhaseEnded` arm, so a new sharer + new viewer pair triggering both is harmless. Removal is tracked in PRODUCT.md "Deferred follow-ups".
 ### Considered alternatives
@@ -97,7 +100,7 @@ Two `BlocklistAIHistoryEvent::AppendedExchange`-driven teardowns at `app/src/ter
 ## Testing strategy
 Per-stage details live in `STAGE-1.md` and `STAGE-2.md`. High-level:
 - Stage 1 covers serialization round-trip tests on `SpawnAgentRequest { prompt: None }` and updated borrow-site fixtures.
-- Stage 2 covers behavioral tests on empty-prompt auto-submit and submit_handoff in `app/src/terminal/view/ambient_agent/model_tests.rs` (three substitution outcomes: `"Continue"`, snapshot-rehydration, `None`); the CLI parser test in `crates/warp_cli/src/lib_tests.rs:233-252`; viewer-side tests in `app/src/terminal/shared_session/viewer/event_loop_tests.rs`; sandbox-side unit tests on `TerminalModel::send_ambient_setup_phase_ended_for_shared_session`; and direct `IdleTimeoutSender::complete_with_optional_idle` tests in `app/src/ai/agent_sdk/driver_tests.rs`.
+- Stage 2 covers behavioral tests on empty-prompt auto-submit and submit_handoff in `app/src/terminal/view/ambient_agent/model_tests.rs` (three substitution outcomes: `"Continue"`, snapshot-rehydration, `None`); CLI parser tests in `crates/warp_cli/src/lib_tests.rs:232-296` (accept + both `requires_all` rejection cases); viewer-side tests in `app/src/terminal/shared_session/viewer/event_loop_tests.rs`; sandbox-side unit tests on `TerminalModel::send_ambient_setup_phase_ended_for_shared_session`; and direct `IdleTimeoutSender::complete_with_optional_idle` tests in `app/src/ai/agent_sdk/driver_tests.rs`.
 ## Validation
 - `cargo fmt --all --check`.
 - `cargo check -p warp --tests`.
