@@ -112,15 +112,9 @@ impl CloudModeSetupTextBlock {
             .agent_view_state()
             .active_conversation_id()
         {
-            // Legacy fallback teardown for the "Running setup commands…" chip.
-            // The canonical signal is
-            // OrderedTerminalEventType::AmbientSetupPhaseEnded; the viewer's
-            // event loop arm tears down the chip via
-            // AmbientAgentViewModel::tear_down_active_setup_command_group. We
-            // keep this AppendedExchange-driven subscription as a transition
-            // fallback so new viewers stay compatible with old sharers that
-            // don't emit the marker. Both paths are idempotent. Removal is
-            // tracked in the empty-prompt-handoff plan's Deferred follow-ups.
+            // Compat fallback for viewers connected to pre-feature sharers
+            // that don't emit AmbientSetupPhaseEnded. Idempotent with the
+            // canonical event_loop arm.
             ctx.subscribe_to_model(
                 &BlocklistAIHistoryModel::handle(ctx),
                 move |me, history_model, event, ctx| {

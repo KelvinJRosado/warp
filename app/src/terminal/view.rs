@@ -5469,14 +5469,9 @@ impl TerminalView {
                     }
                 }
 
-                // Legacy fallback teardown for the pre-first-exchange gate. The
-                // canonical signal is the sharer-emitted
-                // OrderedTerminalEventType::AmbientSetupPhaseEnded handled in
-                // app/src/terminal/shared_session/viewer/event_loop.rs. We keep
-                // this AppendedExchange-driven path as a transition fallback so
-                // new viewers stay compatible with old sharers that don't emit the
-                // marker. Both paths are idempotent. Removal is tracked in the
-                // empty-prompt-handoff plan's Deferred follow-ups.
+                // Compat fallback for viewers connected to pre-feature sharers
+                // that don't emit AmbientSetupPhaseEnded. Idempotent with the
+                // canonical event_loop arm.
                 if self.is_ambient_agent_session(ctx)
                     && self
                         .model

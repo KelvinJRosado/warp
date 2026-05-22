@@ -346,28 +346,13 @@ impl EventLoop {
                     }
                 }
                 OrderedTerminalEventType::AmbientSetupPhaseEnded => {
-                    // Sharer signaled that the Cloud Mode Setup V2 phase is complete.
-                    // This is the canonical teardown signal — emitted on every cloud
-                    // agent run by the sandboxed AgentDriver, both on the skip-initial-
-                    // turn path (where no follow-up AppendedExchange ever fires) and on
-                    // the normal path (where an AppendedExchange will follow). We clear
-                    // the pre-first-exchange gate and hide the "Running setup
-                    // commands…" chip here. The legacy AppendedExchange-driven
-                    // teardowns in app/src/terminal/view.rs and
-                    // app/src/terminal/view/ambient_agent/block/setup_command_text.rs
-                    // are kept as a transition fallback for old sharers that don't
-                    // emit the marker; both paths are idempotent.
-                    {
-                        let mut model = self.terminal_model.lock();
-                        if model
-                            .block_list()
-                            .is_executing_oz_environment_startup_commands()
-                        {
-                            model
-                                .block_list_mut()
-                                .set_is_executing_oz_environment_startup_commands(false);
-                        }
-                    }
+                    // Canonical setup-complete signal from the sharer. Legacy
+                    // AppendedExchange-driven teardowns remain idempotently as
+                    // a fallback for pre-feature sharers.
+                    self.terminal_model
+                        .lock()
+                        .block_list_mut()
+                        .set_is_executing_oz_environment_startup_commands(false);
                     if let Some(view) = self.terminal_view.upgrade(ctx) {
                         view.update(ctx, |view, ctx| {
                             if let Some(ambient_model) = view.ambient_agent_view_model().cloned() {

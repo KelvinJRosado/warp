@@ -706,6 +706,73 @@ fn test_ambient_setup_phase_ended_clears_setup_state() {
 }
 
 #[test]
+fn test_ambient_setup_phase_ended_when_flag_already_false() {
+    App::test((), |mut app| async move {
+        let terminal_view = cloud_mode_terminal_view(&mut app);
+        let model = terminal_view.read(&app, |view, _| view.model.clone());
+        let channel_event_proxy = ChannelEventListener::new_for_test();
+
+        let event_loop = app.add_model(|ctx| {
+            EventLoop::new(
+                model.clone(),
+                terminal_view.downgrade(),
+                channel_event_proxy.clone(),
+                WindowSize {
+                    num_rows: 0,
+                    num_cols: 0,
+                },
+                empty_scrollback(),
+                None,
+                SharedSessionInitialLoadMode::ReplaceFromSessionScrollback,
+                ctx,
+            )
+        });
+
+        // BlockList flag starts at the default `false`; we intentionally do not
+        // call set_is_executing_oz_environment_startup_commands(true) so the
+        // marker arrives against a tree that never observed setup phase.
+        assert!(!model
+            .lock()
+            .block_list()
+            .is_executing_oz_environment_startup_commands());
+
+        let initial_group_id = terminal_view.read(&app, |view, ctx| {
+            view.ambient_agent_view_model()
+                .expect("cloud mode view has ambient agent view model")
+                .as_ref(ctx)
+                .setup_command_state()
+                .current_group_id()
+        });
+
+        event_loop.update(&mut app, |event_loop, ctx| {
+            event_loop.process_ordered_terminal_event(
+                OrderedTerminalEvent {
+                    event_no: 0,
+                    event_type: OrderedTerminalEventType::AmbientSetupPhaseEnded,
+                },
+                ctx,
+            );
+        });
+
+        // Flag stays cleared, and the unconditional teardown leaves the
+        // initial setup group finished and collapsed.
+        assert!(!model
+            .lock()
+            .block_list()
+            .is_executing_oz_environment_startup_commands());
+        terminal_view.read(&app, |view, ctx| {
+            let setup_state = view
+                .ambient_agent_view_model()
+                .expect("cloud mode view has ambient agent view model")
+                .as_ref(ctx)
+                .setup_command_state();
+            assert!(!setup_state.is_running(initial_group_id));
+            assert!(!setup_state.should_expand(initial_group_id));
+        });
+    })
+}
+
+#[test]
 fn test_ambient_setup_phase_ended_is_idempotent() {
     App::test((), |mut app| async move {
         let terminal_view = cloud_mode_terminal_view(&mut app);
