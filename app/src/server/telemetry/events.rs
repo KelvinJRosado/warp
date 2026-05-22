@@ -1192,6 +1192,8 @@ pub enum TelemetryQueuedQueryOrigin {
     InitialCloudMode,
     QueueSlashCommand,
     AutoQueueToggle,
+    CompactAndSlashCommand,
+    ForkAndCompactSlashCommand,
 }
 
 impl From<QueuedQueryOrigin> for TelemetryQueuedQueryOrigin {
@@ -1200,6 +1202,8 @@ impl From<QueuedQueryOrigin> for TelemetryQueuedQueryOrigin {
             QueuedQueryOrigin::InitialCloudMode => Self::InitialCloudMode,
             QueuedQueryOrigin::QueueSlashCommand => Self::QueueSlashCommand,
             QueuedQueryOrigin::AutoQueueToggle => Self::AutoQueueToggle,
+            QueuedQueryOrigin::CompactAndSlashCommand => Self::CompactAndSlashCommand,
+            QueuedQueryOrigin::ForkAndCompactSlashCommand => Self::ForkAndCompactSlashCommand,
         }
     }
 }

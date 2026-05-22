@@ -5074,6 +5074,27 @@ impl TerminalView {
         self.enqueue_prompt(prompt, QueuedQueryOrigin::InitialCloudMode, ctx)
     }
 
+    /// Files a follow-up prompt for the conversation that will run after the next conversation
+    /// finishes. Used by `/compact-and` and `/fork-and-compact` to queue the user's argument
+    /// behind a summarize (or fork-then-summarize).
+    pub fn enqueue_followup_prompt(
+        &mut self,
+        prompt: String,
+        origin: QueuedQueryOrigin,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if FeatureFlag::QueuedPromptsV2.is_enabled() {
+            self.queued_query_model.update(ctx, |model, ctx| {
+                model.append(QueuedQuery::new(prompt, origin), ctx);
+            });
+        } else {
+            self.send_user_query_after_next_conversation_finished(
+                prompt, /* show_close_button */ true, /* show_send_now_button */ false,
+                ctx,
+            );
+        }
+    }
+
     /// Drains one prompt from the queued-query model when the active conversation finishes.
     fn drain_queued_prompts(&mut self, finish_reason: FinishReason, ctx: &mut ViewContext<Self>) {
         match finish_reason {

@@ -12094,10 +12094,9 @@ impl Workspace {
                     });
 
                 if let Some(prompt) = initial_prompt {
-                    terminal_view.send_user_query_after_next_conversation_finished(
+                    terminal_view.enqueue_followup_prompt(
                         prompt,
-                        /* show_close_button */ true,
-                        /* show_send_now_button */ false,
+                        crate::ai::blocklist::QueuedQueryOrigin::ForkAndCompactSlashCommand,
                         terminal_view_ctx,
                     );
                 }
@@ -12191,10 +12190,22 @@ impl Workspace {
             });
 
             if let Some(prompt) = initial_prompt {
-                terminal.send_user_query_after_next_conversation_finished(
-                    prompt, /* show_close_button */ true,
-                    /* show_send_now_button */ false, ctx,
-                );
+                // The slash-command handler at
+                // `app/src/terminal/input/slash_commands/mod.rs` for `/compact-and` short-circuits
+                // when there is no active conversation, so `selected_conversation_id` is set by the
+                // time we get here. Skip the follow-up if for some reason that invariant is broken.
+                if terminal
+                    .ai_context_model()
+                    .as_ref(ctx)
+                    .selected_conversation_id(ctx)
+                    .is_some()
+                {
+                    terminal.enqueue_followup_prompt(
+                        prompt,
+                        crate::ai::blocklist::QueuedQueryOrigin::CompactAndSlashCommand,
+                        ctx,
+                    );
+                }
             }
         });
     }
