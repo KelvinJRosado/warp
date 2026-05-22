@@ -349,17 +349,9 @@ impl EventLoop {
                     // Canonical setup-complete signal from the sharer. Legacy
                     // AppendedExchange-driven teardowns remain idempotently as
                     // a fallback for pre-feature sharers.
-                    self.terminal_model
-                        .lock()
-                        .block_list_mut()
-                        .set_is_executing_oz_environment_startup_commands(false);
                     if let Some(view) = self.terminal_view.upgrade(ctx) {
                         view.update(ctx, |view, ctx| {
-                            if let Some(ambient_model) = view.ambient_agent_view_model().cloned() {
-                                ambient_model.update(ctx, |model, ctx| {
-                                    model.tear_down_active_setup_command_group(ctx);
-                                });
-                            }
+                            view.tear_down_ambient_setup_phase(ctx);
                         });
                     }
                 }

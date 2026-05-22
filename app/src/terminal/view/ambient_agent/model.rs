@@ -642,27 +642,11 @@ impl AmbientAgentViewModel {
         ctx.emit(AmbientAgentViewModelEvent::HandoffSnapshotUploadFailed { error_message });
     }
 
-    /// Build the `SpawnAgentRequest` for a handoff submit.
-    ///
-    /// Callers MUST normalize an empty prompt to `None` before calling; the
-    /// substitution arms below treat `None` as the empty-prompt signal.
-    ///
-    /// When `prompt` is `None`, the wire prompt is selected client-side per the
-    /// resolved design:
-    ///   - **Active source + non-empty snapshot token.** Substituted with
-    ///     `"Continue. Apply the workspace changes from my previous session."`
-    ///     so the cloud agent both picks up the in-flight intent and rehydrates
-    ///     the workspace. The snapshot token rides on the wire alongside.
-    ///   - **Active source only.** Substituted with `"Continue"`. Drives the
-    ///     queued-prompt indicator (wire == display).
-    ///   - **Idle source + non-empty snapshot token.** Substituted with
-    ///     `"Apply the workspace changes from my previous session."`. The
-    ///     snapshot token rides on the wire alongside.
-    ///   - **Idle source + no snapshot token.** Wire prompt is `None`; the
-    ///     worker derives `--skip-initial-turn` from the execution input at
-    ///     dispatch time.
-    ///
-    /// All substitutions are local-to-cloud-only.
+    /// Build the `SpawnAgentRequest` for a handoff submit. Callers MUST
+    /// normalize an empty prompt to `None` before calling; the wire-prompt
+    /// helper treats `None` as the empty-prompt signal. See
+    /// [`crate::ai::blocklist::handoff::handoff_wire_prompt`] for the
+    /// substitution table.
     #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
     fn build_handoff_spawn_request(
         &self,
@@ -678,20 +662,11 @@ impl AmbientAgentViewModel {
             .as_ref()
             .is_some_and(|token| !token.as_str().is_empty());
 
-        let effective_prompt: Option<String> =
-            match (prompt, source_conversation_active, has_snapshot_content) {
-                (Some(p), _, _) => Some(p),
-                (None, true, true) => Some(
-                    "Continue. Apply the workspace changes from my previous session.".to_owned(),
-                ),
-                (None, true, false) => Some("Continue".to_owned()),
-                (None, false, true) => {
-                    Some("Apply the workspace changes from my previous session.".to_owned())
-                }
-                (None, false, false) => None,
-            };
-
-        let (wire_prompt, mode) = match effective_prompt {
+        let (wire_prompt, mode) = match crate::ai::blocklist::handoff::handoff_wire_prompt(
+            prompt,
+            source_conversation_active,
+            has_snapshot_content,
+        ) {
             Some(p) => {
                 let (p, mode) = extract_user_query_mode(p);
                 (Some(p), mode)

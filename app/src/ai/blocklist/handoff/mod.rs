@@ -60,3 +60,32 @@ pub(crate) fn source_conversation_has_content(
         .active_conversation(terminal_view_id)
         .is_some_and(|conversation| !conversation.is_empty())
 }
+
+/// Resolve the wire-level prompt for a handoff submit.
+///
+/// `submitted` is the user-typed prompt, already normalized so empty strings
+/// are passed as `None`. `source_conversation_active` is whether the source
+/// conversation was in-progress / blocked at handoff initiation.
+/// `has_snapshot_content` is whether the snapshot upload settled with a
+/// non-empty token. All substitutions are local-to-cloud-only; the server
+/// never sees an in-progress signal it has to interpret. Display tracks the
+/// wire one-to-one, so the returned string is also what the queued-prompt
+/// indicator renders to the user.
+#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+pub(crate) fn handoff_wire_prompt(
+    submitted: Option<String>,
+    source_conversation_active: bool,
+    has_snapshot_content: bool,
+) -> Option<String> {
+    match (submitted, source_conversation_active, has_snapshot_content) {
+        (Some(p), _, _) => Some(p),
+        (None, true, true) => {
+            Some("Continue. Apply the workspace changes from my previous session.".to_owned())
+        }
+        (None, true, false) => Some("Continue".to_owned()),
+        (None, false, true) => {
+            Some("Apply the workspace changes from my previous session.".to_owned())
+        }
+        (None, false, false) => None,
+    }
+}

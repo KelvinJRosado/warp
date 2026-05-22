@@ -2370,22 +2370,19 @@ impl AgentDriver {
         // Create a oneshot channel to signal task completion.
         let (tx, rx) = oneshot::channel();
         let run_exit = IdleTimeoutSender::new(tx);
+        let restored_conversation_id = self.restored_conversation_id;
 
-        // Empty-prompt local-to-cloud handoff: skip the initial LLM turn so the
-        // agent doesn't hallucinate against an empty user message. We schedule
-        // the deferred `Success` here, *before* the history subscription below
-        // is wired up; a follow-up `AppendedExchange` cancels this timer via
-        // the shared `Arc<AtomicUsize>` generation counter inside
-        // `IdleTimeoutSender`.
-        let should_skip_initial_turn =
-            self.skip_initial_turn && matches!(&task_prompt, AgentRunPrompt::ServerSide { .. });
-        if self.skip_initial_turn && !should_skip_initial_turn {
-            log::warn!(
-                "[DEBUG] skip_initial_turn=true paired with AgentRunPrompt::Local; ignoring skip request"
-            );
-        }
-        if should_skip_initial_turn {
-            let restored_conversation_id = self.restored_conversation_id;
+        // ServerSide-prompt prologue, shared by the skip and non-skip paths:
+        // enter the agent view and emit the canonical
+        // `AmbientSetupPhaseEnded` marker so viewers tear down the Cloud Mode
+        // Setup V2 chip. `AgentRunPrompt::Local` has no cloud setup phase and
+        // enters the view with the user prompt itself below.
+        //
+        // For the skip path we also schedule the deferred `Success` here,
+        // *before* the history subscription is wired up; a follow-up
+        // `AppendedExchange` cancels the timer via the shared
+        // `Arc<AtomicUsize>` generation counter inside `IdleTimeoutSender`.
+        if matches!(&task_prompt, AgentRunPrompt::ServerSide { .. }) {
             self.terminal_driver.update(ctx, |td, ctx| {
                 td.with_terminal_view(ctx, |terminal, ctx| {
                     if FeatureFlag::AgentView.is_enabled() {
@@ -2396,20 +2393,18 @@ impl AgentDriver {
                             ctx,
                         );
                     }
-                    // Emit AmbientSetupPhaseEnded so the viewer tears down the
-                    // Cloud Mode Setup V2 chip and clears the pre-first-exchange
-                    // gate without waiting for an AppendedExchange that's never
-                    // going to arrive.
                     terminal
                         .model
                         .lock()
                         .send_ambient_setup_phase_ended_for_shared_session();
                 })
             });
-            run_exit.complete_with_optional_idle(
-                self.idle_on_complete,
-                SDKConversationOutputStatus::Success,
-            );
+            if self.skip_initial_turn {
+                run_exit.complete_with_optional_idle(
+                    self.idle_on_complete,
+                    SDKConversationOutputStatus::Success,
+                );
+            }
         }
 
         // Subscribe before the conversation starts.
@@ -2714,14 +2709,13 @@ impl AgentDriver {
             .context("Failed to write artifact_created"));
         });
 
-        // Submit the AI query for the non-skip paths. The skip path above
-        // already entered the view, emitted the marker, and scheduled the
-        // deferred `Success`; the history subscription will cancel that idle
-        // timer on the first follow-up `AppendedExchange`.
-        if !should_skip_initial_turn {
-            // If we restored a conversation from --conversation, use that conversation ID
-            // so the prompt is sent as a follow-up to the restored conversation.
-            let restored_conversation_id = self.restored_conversation_id;
+        // Dispatch the AI input for the non-skip paths. The ServerSide
+        // prologue above already entered the view and emitted the
+        // `AmbientSetupPhaseEnded` marker; here we just fire the LLM input.
+        // `AgentRunPrompt::Local` enters the view with the user prompt
+        // itself (and uses the restored conversation id when present so the
+        // prompt is sent as a follow-up to a `--conversation`-restored run).
+        if !self.skip_initial_turn {
             self.terminal_driver.update(ctx, |td, ctx| {
                 td.with_terminal_view(ctx, |terminal, ctx| match task_prompt {
                     AgentRunPrompt::Local(prompt_str) => {
@@ -2748,23 +2742,6 @@ impl AgentDriver {
                             return;
                         };
                         let ambient_run_id = task_id.to_string();
-
-                        if FeatureFlag::AgentView.is_enabled() {
-                            terminal.enter_agent_view(
-                                None,
-                                restored_conversation_id,
-                                AgentViewEntryOrigin::Cli,
-                                ctx,
-                            );
-                        }
-
-                        // Emit the canonical setup-phase-complete marker so
-                        // viewers can tear down the Cloud Mode Setup V2 chip.
-                        terminal
-                            .model
-                            .lock()
-                            .send_ambient_setup_phase_ended_for_shared_session();
-
                         terminal.ai_controller().update(ctx, |controller, ctx| {
                             controller.send_ai_input_with_context(
                                 |context| AIAgentInput::StartFromAmbientRunPrompt {
