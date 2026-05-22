@@ -807,7 +807,7 @@ fn test_local_to_cloud_handoff_session_join_keeps_details_panel_hidden() {
                         snapshot_upload: SnapshotUploadStatus::Pending,
                         submission_state: HandoffSubmissionState::Idle,
                         auto_submit: None,
-                        source_conversation_in_progress: false,
+                        source_conversation_active: false,
                     }),
                     ctx,
                 );

@@ -4022,22 +4022,36 @@ impl Input {
         }
 
         let prompt = self.editor.as_ref(ctx).buffer_text(ctx).trim().to_owned();
-        // `&` Enter on an empty buffer:
-        //   - Pre-feature: no-op (swallow the Enter so the input keeps the
-        //     compose draft).
-        //   - With `EmptyPromptHandoff` on AND the source conversation has
-        //     content: fall through and build a `PendingCloudLaunch` with an
-        //     empty prompt; `build_handoff_spawn_request` decides what to send
-        //     on the wire.
-        //   - With the flag on but the source conversation is missing or
-        //     empty (the guardrail): no-op, same as pre-feature.
-        if prompt.is_empty()
-            && !(FeatureFlag::EmptyPromptHandoff.is_enabled()
-                && crate::ai::blocklist::handoff::source_conversation_has_content(
-                    self.terminal_view_id,
-                    ctx,
-                ))
-        {
+        // Empty buffer + source conversation with content launches an immediate
+        // empty-prompt handoff; the workspace synthesizes the launch (and
+        // collects attachments) so all three entry points stay symmetric.
+        // Empty buffer without source content is a no-op so the compose draft
+        // is preserved.
+        if prompt.is_empty() {
+            if !crate::ai::blocklist::handoff::source_conversation_has_content(
+                self.terminal_view_id,
+                ctx,
+            ) {
+                return true;
+            }
+
+            if CloudAmbientAgentEnvironment::get_all(ctx).is_empty() {
+                ctx.emit(Event::OpenHandoffEnvironmentCreationModal);
+                return true;
+            }
+
+            let environment_id = self
+                .handoff_compose_state
+                .as_ref(ctx)
+                .selected_environment_id()
+                .cloned();
+            let entry_point = self.handoff_compose_state.as_ref(ctx).entry_point();
+            self.exit_cloud_handoff_compose_and_clear(ctx);
+            ctx.dispatch_typed_action_deferred(WorkspaceAction::OpenLocalToCloudHandoffPane {
+                launch: None,
+                environment_id,
+                entry_point,
+            });
             return true;
         }
 

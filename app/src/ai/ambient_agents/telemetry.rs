@@ -122,13 +122,13 @@ pub enum CloudAgentTelemetryEvent {
     /// The async snapshot-upload pipeline that backs a handoff has settled.
     /// Fires once per handoff after `derive_touched_workspace` completes.
     /// Pair with `HandoffInitiated` on the same run to learn whether the
-    /// `SnapshotRehydration` injection actually had snapshot content.
+    /// `SnapshotRehydration` injection path actually carried snapshot content.
     #[cfg_attr(target_family = "wasm", allow(dead_code))]
     HandoffSnapshotPrepared {
         /// True when the derived `TouchedWorkspace` had at least one repo or
-        /// orphan file (i.e. the cloud agent will receive a non-empty snapshot
-        /// rehydration system message). False when the workspace was empty.
-        had_snapshot: bool,
+        /// orphan file. Reports what the snapshot pipeline produced; the upload
+        /// itself may still fail downstream, so the wire prompt is not implied.
+        derived_workspace_had_content: bool,
     },
 }
 
@@ -180,8 +180,10 @@ impl TelemetryEvent for CloudAgentTelemetryEvent {
                 "empty_prompt": empty_prompt,
                 "injection_path": injection_path,
             })),
-            CloudAgentTelemetryEvent::HandoffSnapshotPrepared { had_snapshot } => Some(json!({
-                "had_snapshot": had_snapshot,
+            CloudAgentTelemetryEvent::HandoffSnapshotPrepared {
+                derived_workspace_had_content,
+            } => Some(json!({
+                "derived_workspace_had_content": derived_workspace_had_content,
             })),
         }
     }

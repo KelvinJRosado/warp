@@ -2535,41 +2535,33 @@ impl TypedActionView for AgentInputFooter {
                 });
             }
             AgentInputFooterAction::OpenHandoffPane => {
-                if !(FeatureFlag::OzHandoff.is_enabled()
+                if FeatureFlag::OzHandoff.is_enabled()
                     && FeatureFlag::HandoffLocalCloud.is_enabled()
-                    && cfg!(all(feature = "local_fs", not(target_family = "wasm"))))
+                    && cfg!(all(feature = "local_fs", not(target_family = "wasm")))
                 {
-                    // Nothing to do without the local-to-cloud feature stack.
-                } else {
-                    // The empty-prompt path requires a non-empty source
-                    // conversation to fork / rehydrate. When the guardrail
-                    // fails (no source or empty source), fall through to the
-                    // legacy `&` compose-mode behavior.
+                    // Guardrail passed: dispatch the immediate-handoff workspace action
+                    // and skip `&` compose mode. Otherwise fall back to compose so the
+                    // user can type a prompt before forking.
                     #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-                    let empty_prompt_allowed = FeatureFlag::EmptyPromptHandoff.is_enabled()
-                        && crate::ai::blocklist::handoff::source_conversation_has_content(
+                    let guardrail_passed =
+                        crate::ai::blocklist::handoff::source_conversation_has_content(
                             self.terminal_view_id,
                             ctx,
                         );
                     #[cfg(not(all(feature = "local_fs", not(target_family = "wasm"))))]
-                    let empty_prompt_allowed = false;
+                    let guardrail_passed = false;
 
-                    if empty_prompt_allowed {
-                        // With `EmptyPromptHandoff`, the chip dispatches the
-                        // workspace action directly and skips `&` compose mode.
+                    if guardrail_passed {
                         #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-                        {
-                            ctx.dispatch_typed_action_deferred(
-                                WorkspaceAction::OpenLocalToCloudHandoffPane {
-                                    launch: None,
-                                    environment_id: None,
-                                    entry_point:
-                                        crate::ai::ambient_agents::telemetry::HandoffEntryPoint::FooterChip,
-                                },
-                            );
-                        }
+                        ctx.dispatch_typed_action_deferred(
+                            WorkspaceAction::OpenLocalToCloudHandoffPane {
+                                launch: None,
+                                environment_id: None,
+                                entry_point:
+                                    crate::ai::ambient_agents::telemetry::HandoffEntryPoint::FooterChip,
+                            },
+                        );
                     } else {
-                        // Legacy / fallback: activate `&` compose mode in the source input.
                         ctx.emit(AgentInputFooterEvent::OpenHandoffPane);
                     }
                 }

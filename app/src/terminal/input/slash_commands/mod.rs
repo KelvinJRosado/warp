@@ -922,17 +922,14 @@ impl Input {
                             entry_point: HandoffEntryPoint::SlashCommand,
                         },
                     );
-                } else if FeatureFlag::EmptyPromptHandoff.is_enabled()
-                    && crate::ai::blocklist::handoff::source_conversation_has_content(
-                        self.terminal_view_id,
-                        ctx,
-                    )
-                {
-                    // `/handoff` with no argument, `EmptyPromptHandoff` on, and
-                    // a non-empty source conversation: dispatch directly like
-                    // the footer chip. The workspace synthesizes an empty
-                    // `PendingCloudLaunch` and runs the empty-prompt handoff
-                    // (continue / snapshot rehydration).
+                } else if crate::ai::blocklist::handoff::source_conversation_has_content(
+                    self.terminal_view_id,
+                    ctx,
+                ) {
+                    // Empty `/handoff` with a non-empty source conversation:
+                    // dispatch the immediate empty-prompt handoff (continue /
+                    // snapshot rehydration); the workspace synthesizes the
+                    // launch and collects attachments.
                     ctx.dispatch_typed_action_deferred(
                         WorkspaceAction::OpenLocalToCloudHandoffPane {
                             launch: None,
@@ -940,14 +937,15 @@ impl Input {
                             entry_point: HandoffEntryPoint::SlashCommand,
                         },
                     );
-                } else if FeatureFlag::EmptyPromptHandoff.is_enabled() {
-                    // `EmptyPromptHandoff` is on but the source conversation is
-                    // missing or empty — nothing to hand off. No-op per the
-                    // resolved design (no fallback to compose mode for the
-                    // slash-command entry point).
                 } else {
-                    // Legacy: `/handoff` with no query enters `&` compose mode.
-                    self.activate_cloud_handoff_compose(HandoffEntryPoint::SlashCommand, ctx);
+                    // Empty `/handoff` with no source content — surface a toast
+                    // so the user knows why nothing happened. The chip falls
+                    // back to `&` compose mode here; the slash-command flow
+                    // does not because it has no compose-draft state to seed.
+                    show_error_toast(
+                        "Nothing to hand off — start a conversation first.".to_owned(),
+                        ctx,
+                    );
                 }
             }
             fork if command.name == commands::FORK.name => {

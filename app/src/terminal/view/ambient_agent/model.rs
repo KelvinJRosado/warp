@@ -157,13 +157,12 @@ pub(crate) struct PendingHandoff {
     /// stashed here so `maybe_auto_submit_handoff` can consume it once
     /// the touched workspace and snapshot upload have settled.
     pub(crate) auto_submit: Option<PendingCloudLaunch>,
-    /// Whether the source conversation's tail exchange was in-progress or
-    /// blocked at the time the user submitted the handoff. Captured once at
-    /// handoff initiation so the substitution decision is deterministic and
-    /// local-to-cloud-only — the server never sees an in-progress signal it
-    /// has to interpret. Drives the empty-prompt `"Continue"` substitution
-    /// in `build_handoff_spawn_request`.
-    pub(crate) source_conversation_in_progress: bool,
+    /// Whether the source conversation was active (in-progress or blocked) at
+    /// handoff initiation. Captured once so the substitution decision is
+    /// deterministic and local-to-cloud-only — the server never sees an
+    /// in-progress signal it has to interpret. Drives the empty-prompt
+    /// `"Continue"` substitution in `build_handoff_spawn_request`.
+    pub(crate) source_conversation_active: bool,
 }
 
 /// Status of the ambient agent run.
@@ -377,16 +376,10 @@ impl AmbientAgentViewModel {
         self.set_setup_command_group_visibility(group_id, is_visible, ctx);
     }
 
-    /// Tear down the active "Running setup commands…" chip. Called by the
-    /// viewer event loop in response to an explicit `AmbientSetupPhaseEnded`
-    /// shared-session marker (used by the empty-prompt local-to-cloud handoff
-    /// where the cloud agent skips the initial LLM turn and never emits an
-    /// `AppendedExchange` to drive the normal teardown path).
-    ///
-    /// Resolves the current group from `setup_command_state().current_group_id()`
-    /// (the canonical lookup also used by `set_setup_command_visibility`). Idempotent:
-    /// the inner `finish_setup_command_group` / `set_setup_command_group_visibility`
-    /// helpers no-op when the group is not running or already hidden.
+    /// Tear down the active "Running setup commands…" chip in response to the
+    /// `AmbientSetupPhaseEnded` shared-session marker. Idempotent: the inner
+    /// `finish_setup_command_group` no-ops when the group is not running, and
+    /// `set_setup_command_group_visibility(false)` no-ops when already collapsed.
     pub(crate) fn tear_down_active_setup_command_group(&mut self, ctx: &mut ModelContext<Self>) {
         let group_id = self.setup_commands_state.current_group_id();
         self.finish_setup_command_group(group_id, ctx);
@@ -595,8 +588,9 @@ impl AmbientAgentViewModel {
         ctx.emit(AmbientAgentViewModelEvent::PendingHandoffChanged);
     }
 
-    /// Updates the touched workspace once async derivation completes.
-    /// No-op when no handoff context is set.
+    /// Updates the touched workspace once async derivation completes and emits
+    /// `HandoffSnapshotPrepared` so analytics can join it against the earlier
+    /// `HandoffInitiated.injection_path`. No-op when no handoff context is set.
     #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
     pub(crate) fn set_pending_handoff_workspace(
         &mut self,
@@ -606,7 +600,15 @@ impl AmbientAgentViewModel {
         let Some(handoff) = self.pending_handoff.as_mut() else {
             return;
         };
+        let derived_workspace_had_content =
+            !workspace.repos.is_empty() || !workspace.orphan_files.is_empty();
         handoff.touched_workspace = Some(workspace);
+        send_telemetry_from_ctx!(
+            CloudAgentTelemetryEvent::HandoffSnapshotPrepared {
+                derived_workspace_had_content,
+            },
+            ctx
+        );
         ctx.emit(AmbientAgentViewModelEvent::PendingHandoffChanged);
     }
 
@@ -642,25 +644,25 @@ impl AmbientAgentViewModel {
 
     /// Build the `SpawnAgentRequest` for a handoff submit.
     ///
-    /// `prompt` is the user's submitted prompt. When it is `None` or an empty
-    /// string, the request is built as an empty-prompt handoff and the wire
-    /// prompt is selected client-side per the resolved design:
-    ///   - **In-progress source.** When the source conversation's tail
-    ///     exchange was in-progress / blocked at handoff initiation, the wire
-    ///     prompt is substituted with `"Continue"`. The same string drives the
-    ///     queued-prompt indicator (wire == display).
-    ///   - **Idle source + non-empty snapshot token.** When the source is idle
-    ///     and `initial_snapshot_token` is `Some(non-empty)`, the wire prompt
-    ///     is substituted with
-    ///     `"Apply the workspace changes from my previous session."` so the
-    ///     cloud agent's first user-role turn carries an intent for the
-    ///     rehydrated workspace state. The snapshot token still rides on the
-    ///     wire alongside the substituted prompt.
-    ///   - **Idle source + no snapshot token.** The wire prompt is sent as
-    ///     `None`; the worker derives `--skip-initial-turn` for the sandboxed
-    ///     CLI from the execution input at dispatch time.
+    /// Callers MUST normalize an empty prompt to `None` before calling; the
+    /// substitution arms below treat `None` as the empty-prompt signal.
     ///
-    /// Both substitutions are local-to-cloud-only.
+    /// When `prompt` is `None`, the wire prompt is selected client-side per the
+    /// resolved design:
+    ///   - **Active source + non-empty snapshot token.** Substituted with
+    ///     `"Continue. Apply the workspace changes from my previous session."`
+    ///     so the cloud agent both picks up the in-flight intent and rehydrates
+    ///     the workspace. The snapshot token rides on the wire alongside.
+    ///   - **Active source only.** Substituted with `"Continue"`. Drives the
+    ///     queued-prompt indicator (wire == display).
+    ///   - **Idle source + non-empty snapshot token.** Substituted with
+    ///     `"Apply the workspace changes from my previous session."`. The
+    ///     snapshot token rides on the wire alongside.
+    ///   - **Idle source + no snapshot token.** Wire prompt is `None`; the
+    ///     worker derives `--skip-initial-turn` from the execution input at
+    ///     dispatch time.
+    ///
+    /// All substitutions are local-to-cloud-only.
     #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
     fn build_handoff_spawn_request(
         &self,
@@ -668,25 +670,26 @@ impl AmbientAgentViewModel {
         attachments: Vec<AttachmentInput>,
         forked_conversation_id: Option<String>,
         initial_snapshot_token: Option<InitialSnapshotToken>,
+        source_conversation_active: bool,
         ctx: &AppContext,
     ) -> SpawnAgentRequest {
         let config = Some(self.build_default_spawn_config(ctx));
-        let source_in_progress = self
-            .pending_handoff
-            .as_ref()
-            .is_some_and(|h| h.source_conversation_in_progress);
         let has_snapshot_content = initial_snapshot_token
             .as_ref()
             .is_some_and(|token| !token.as_str().is_empty());
 
-        let effective_prompt: Option<String> = match prompt {
-            Some(p) if !p.is_empty() => Some(p),
-            _ if source_in_progress => Some("Continue".to_owned()),
-            _ if has_snapshot_content => {
-                Some("Apply the workspace changes from my previous session.".to_owned())
-            }
-            _ => None,
-        };
+        let effective_prompt: Option<String> =
+            match (prompt, source_conversation_active, has_snapshot_content) {
+                (Some(p), _, _) => Some(p),
+                (None, true, true) => Some(
+                    "Continue. Apply the workspace changes from my previous session.".to_owned(),
+                ),
+                (None, true, false) => Some("Continue".to_owned()),
+                (None, false, true) => {
+                    Some("Apply the workspace changes from my previous session.".to_owned())
+                }
+                (None, false, false) => None,
+            };
 
         let (wire_prompt, mode) = match effective_prompt {
             Some(p) => {
@@ -717,7 +720,7 @@ impl AmbientAgentViewModel {
 
     #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
     pub(crate) fn queue_handoff_auto_submit(&mut self, ctx: &mut ModelContext<Self>) -> bool {
-        let Some((launch, forked_conversation_id)) = ({
+        let Some((launch, forked_conversation_id, source_conversation_active)) = ({
             let handoff = self.pending_handoff.as_mut();
             handoff.and_then(|handoff| {
                 if !matches!(handoff.submission_state, HandoffSubmissionState::Idle) {
@@ -725,22 +728,26 @@ impl AmbientAgentViewModel {
                 }
                 let launch = handoff.auto_submit.as_ref()?.clone();
                 handoff.submission_state = HandoffSubmissionState::Queued;
-                Some((launch, handoff.forked_conversation_id.clone()))
+                Some((
+                    launch,
+                    handoff.forked_conversation_id.clone(),
+                    handoff.source_conversation_active,
+                ))
             })
         }) else {
             return false;
         };
 
-        // An empty `PendingCloudLaunch.prompt` is a valid empty-prompt handoff;
-        // `build_handoff_spawn_request` decides what to send on the wire based
-        // on the captured source-conversation state and the snapshot token
-        // (which the queue path never has yet — only `submit_handoff` does).
+        // The queue path never has the snapshot token yet — `submit_handoff`
+        // is the only entry point that does. Empty prompts on this path resolve
+        // to either `"Continue"` (active source) or `None` (idle source).
         let prompt = (!launch.prompt.is_empty()).then_some(launch.prompt);
         self.request = Some(self.build_handoff_spawn_request(
             prompt,
             launch.attachments.request_attachments,
             forked_conversation_id,
             None,
+            source_conversation_active,
             ctx,
         ));
         self.status = Status::WaitingForSession {
@@ -1663,19 +1670,19 @@ impl AmbientAgentViewModel {
         }
         let initial_snapshot_token = handoff.snapshot_upload.initial_snapshot_token();
         let forked_conversation_id = handoff.forked_conversation_id.clone();
+        let source_conversation_active = handoff.source_conversation_active;
         handoff.submission_state = HandoffSubmissionState::Starting;
         ctx.emit(AmbientAgentViewModelEvent::PendingHandoffChanged);
 
-        // Pass `Option<String>` through to `build_handoff_spawn_request` so it
-        // can apply the empty-prompt substitution. An empty submit_handoff
-        // prompt is unusual on the manual path (input.rs gates it) but treat
-        // it the same way the auto-submit path does.
+        // Normalize the empty-prompt case to `None` for the builder; the
+        // builder's substitution arms treat `None` as the empty-prompt signal.
         let prompt = (!prompt.is_empty()).then_some(prompt);
         let request = self.build_handoff_spawn_request(
             prompt,
             attachments,
             forked_conversation_id,
             initial_snapshot_token,
+            source_conversation_active,
             ctx,
         );
         self.spawn_agent_with_request(request, ctx);
