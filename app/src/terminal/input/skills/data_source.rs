@@ -1,5 +1,3 @@
-use std::path::PathBuf;
-
 use ai::skills::{SkillProvider, SkillReference, SkillScope};
 use fuzzy_match::{match_indices_case_insensitive, FuzzyMatchResult};
 use ordered_float::OrderedFloat;
@@ -106,11 +104,10 @@ impl SkillSelectorDataSource {
     }
 
     /// Get the current working directory from the active session
-    fn get_current_working_directory(&self, app: &AppContext) -> Option<PathBuf> {
+    fn get_current_working_directory(&self, app: &AppContext) -> Option<LocalOrRemotePath> {
         self.active_session
             .as_ref(app)
-            .current_working_directory()
-            .map(PathBuf::from)
+            .current_working_directory_location(app)
     }
 }
 
@@ -124,7 +121,6 @@ impl SyncDataSource for SkillSelectorDataSource {
     ) -> Result<Vec<QueryResult<Self::Action>>, DataSourceRunErrorWrapper> {
         let cwd = self.get_current_working_directory(app);
         let cli_agent_providers = self.active_cli_agent_providers(app);
-        let cwd = cwd.map(LocalOrRemotePath::Local);
         let skills = SkillManager::as_ref(app).get_skills_for_working_directory(cwd.as_ref(), app);
 
         // Filter out bundled skills when in open mode, since they cannot be opened.
