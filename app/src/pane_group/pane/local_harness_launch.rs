@@ -141,13 +141,21 @@ pub(super) async fn prepare_local_harness_child_launch(
             prepare_claude_environment_config(&working_dir, &HashMap::new())
                 .map_err(|error| error.to_string())?;
             if let Some(manager) = plugin_manager_for(third_party_harness.cli_agent()) {
-                if let Err(error) = manager.install().await {
-                    log::warn!("Claude plugin installation failed for child harness: {error}");
+                if manager.needs_update() {
+                    if let Err(error) = manager.update().await {
+                        log::warn!("Claude plugin update failed for child harness: {error}");
+                    }
+                } else if !manager.is_installed() {
+                    if let Err(error) = manager.install().await {
+                        log::warn!("Claude plugin installation failed for child harness: {error}");
+                    }
                 }
-                if let Err(error) = manager.install_platform_plugin().await {
-                    log::warn!(
-                        "Claude platform plugin installation failed for child harness: {error}"
-                    );
+                if !manager.is_platform_plugin_installed() {
+                    if let Err(error) = manager.install_platform_plugin().await {
+                        log::warn!(
+                            "Claude platform plugin installation failed for child harness: {error}"
+                        );
+                    }
                 }
             }
 

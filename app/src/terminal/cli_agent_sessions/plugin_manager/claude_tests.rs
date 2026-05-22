@@ -1,6 +1,9 @@
 use std::fs;
 
-use super::{check_installed, installed_version, ClaudeCodePluginManager, CliAgentPluginManager};
+use super::{
+    check_installed, check_platform_plugin_installed, installed_version, ClaudeCodePluginManager,
+    CliAgentPluginManager,
+};
 
 #[test]
 fn installed_when_plugin_present() {
@@ -20,6 +23,46 @@ fn installed_when_plugin_present() {
     .unwrap();
 
     assert!(check_installed(dir.path()));
+}
+
+#[test]
+fn platform_plugin_installed_when_platform_plugin_present() {
+    let dir = tempfile::tempdir().unwrap();
+    let plugins_dir = dir.path().join("plugins");
+    fs::create_dir_all(&plugins_dir).unwrap();
+
+    let json = serde_json::json!({
+        "plugins": {
+            "oz-harness-support@claude-code-warp": [{"version": "1.0.0"}]
+        }
+    });
+    fs::write(
+        plugins_dir.join("installed_plugins.json"),
+        serde_json::to_string(&json).unwrap(),
+    )
+    .unwrap();
+
+    assert!(check_platform_plugin_installed(dir.path()));
+}
+
+#[test]
+fn platform_plugin_not_installed_when_only_notification_plugin_present() {
+    let dir = tempfile::tempdir().unwrap();
+    let plugins_dir = dir.path().join("plugins");
+    fs::create_dir_all(&plugins_dir).unwrap();
+
+    let json = serde_json::json!({
+        "plugins": {
+            "warp@claude-code-warp": [{"version": "1.0.0"}]
+        }
+    });
+    fs::write(
+        plugins_dir.join("installed_plugins.json"),
+        serde_json::to_string(&json).unwrap(),
+    )
+    .unwrap();
+
+    assert!(!check_platform_plugin_installed(dir.path()));
 }
 
 #[test]

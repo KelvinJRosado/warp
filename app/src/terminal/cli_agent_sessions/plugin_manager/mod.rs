@@ -159,6 +159,12 @@ pub(crate) trait CliAgentPluginManager: Send + Sync {
         false
     }
 
+    /// Whether this agent's Oz platform plugin is already installed.
+    /// Default returns `true` because most agents do not have a platform plugin.
+    fn is_platform_plugin_installed(&self) -> bool {
+        true
+    }
+
     /// Install the Warp notification plugin.
     /// Default returns an error — only agents with `can_auto_install() == true` should override.
     async fn install(&self) -> Result<(), PluginInstallError> {

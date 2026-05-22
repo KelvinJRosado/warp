@@ -15,7 +15,6 @@ use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::{vec2f, Vector2F};
 use settings::Setting;
 use warp_cli::agent::Harness;
-use warp_core::features::FeatureFlag;
 use warp_core::ui::theme::Fill;
 use warpui::elements::{
     Border, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty,
@@ -42,6 +41,7 @@ use crate::ai::harness_display;
 use crate::ai::llms::LLMInfo;
 use crate::ai::local_child_harnesses::{
     local_child_harness_disabled_message, local_child_harness_is_enabled,
+    local_child_harness_setup_state, LocalChildHarnessSetupState,
 };
 use crate::appearance::Appearance;
 use crate::menu::{MenuItem, MenuItemFields};
@@ -91,6 +91,8 @@ pub trait OrchestrationControlAction: Clone + Debug + Send + Sync + 'static {
     fn auth_secret_changed(name: Option<String>) -> Self;
     /// User picked the "New API key…" item; opens the workspace create modal.
     fn create_new_auth_secret_requested() -> Self;
+    /// User picked a local harness install help link.
+    fn open_harness_install_docs(url: &'static str) -> Self;
 }
 
 // ── Shared edit state ───────────────────────────────────────────────
@@ -608,9 +610,8 @@ pub fn first_filtered_model_id<V: View>(
     }
 }
 
-fn should_show_harness_picker(state: &OrchestrationEditState) -> bool {
-    !matches!(state.execution_mode, RunAgentsExecutionMode::Local)
-        || FeatureFlag::LocalClaudeCodexChildHarnesses.is_enabled()
+fn should_show_harness_picker(_state: &OrchestrationEditState) -> bool {
+    true
 }
 
 pub fn populate_harness_picker<A: OrchestrationControlAction, V: View>(
@@ -638,7 +639,7 @@ pub fn populate_harness_picker<A: OrchestrationControlAction, V: View>(
             harness => harness,
         };
 
-        // Sort enabled harnesses before disabled ones, preserving
+        // Sort selectable harnesses before disabled ones, preserving
         // relative order within each group.
         // Filter out Gemini — it is not yet supported as a multi-agent
         // harness and causes an infinite "Spawning agents" hang.
@@ -649,7 +650,15 @@ pub fn populate_harness_picker<A: OrchestrationControlAction, V: View>(
                 harness != Harness::Gemini && (!is_local || local_child_harness_is_enabled(harness))
             })
             .collect();
-        sorted.sort_by_key(|entry| !entry.enabled);
+        sorted.sort_by_key(|entry| {
+            let harness = resolve_entry_harness(entry.harness, &entry.display_name);
+            let local_setup_state = if is_local {
+                Some(local_child_harness_setup_state(harness))
+            } else {
+                None
+            };
+            !(entry.enabled && local_setup_state.is_none_or(|state| state.is_selectable()))
+        });
 
         // Resolve the target harness so we can match by enum variant
         // even when the `initial_harness` string is "claude" but the
@@ -662,6 +671,11 @@ pub fn populate_harness_picker<A: OrchestrationControlAction, V: View>(
 
         for entry in sorted {
             let harness = resolve_entry_harness(entry.harness, &entry.display_name);
+            let local_setup_state = if is_local {
+                Some(local_child_harness_setup_state(harness))
+            } else {
+                None
+            };
             // Use the server-provided display_name for the label so stale
             // cache entries (where harness deserializes as Unknown) still
             // show the correct name.
@@ -671,12 +685,22 @@ pub fn populate_harness_picker<A: OrchestrationControlAction, V: View>(
                 fields = fields.with_override_icon_color(Fill::from(color));
             }
             let harness_str = harness.to_string();
-            if entry.enabled {
+            let selectable =
+                entry.enabled && local_setup_state.is_none_or(|state| state.is_selectable());
+            if selectable {
                 fields = fields.with_on_select_action(DropdownAction::SelectActionAndClose(
                     A::harness_changed(harness_str.clone()),
                 ));
             } else {
                 fields = fields.with_disabled(true);
+                let tooltip = match local_setup_state {
+                    Some(LocalChildHarnessSetupState::MissingHarness { tooltip, .. }) => tooltip,
+                    Some(LocalChildHarnessSetupState::ProductDisabled { message }) => message,
+                    Some(LocalChildHarnessSetupState::Ready) | None => {
+                        "Disabled by your administrator"
+                    }
+                };
+                fields = fields.with_tooltip(tooltip);
             }
             // Match by harness string first, then fall back to matching
             // the display_name against the client-side name for the target
@@ -692,6 +716,17 @@ pub fn populate_harness_picker<A: OrchestrationControlAction, V: View>(
                 }
             }
             items.push(MenuItem::Item(fields));
+            if let Some(LocalChildHarnessSetupState::MissingHarness { docs_url, .. }) =
+                local_setup_state
+            {
+                items.push(MenuItem::Item(
+                    MenuItemFields::new("Learn more")
+                        .with_indent()
+                        .with_on_select_action(DropdownAction::SelectActionAndClose(
+                            A::open_harness_install_docs(docs_url),
+                        )),
+                ));
+            }
         }
         dropdown.set_rich_items(items, ctx_dropdown);
         if let Some(name) = selected_name {
@@ -1099,6 +1134,19 @@ pub fn accept_disabled_reason_with_auth(
 ) -> Option<String> {
     if let Some(reason) = state.accept_disabled_reason() {
         return Some(reason.to_string());
+    }
+    if matches!(state.execution_mode, RunAgentsExecutionMode::Local) {
+        if let Some(harness) = Harness::parse_local_child_harness(&state.harness_type) {
+            match local_child_harness_setup_state(harness) {
+                LocalChildHarnessSetupState::MissingHarness { tooltip, .. } => {
+                    return Some(tooltip.to_string());
+                }
+                LocalChildHarnessSetupState::ProductDisabled { message } => {
+                    return Some(message.to_string());
+                }
+                LocalChildHarnessSetupState::Ready => {}
+            }
+        }
     }
     if auth_secret_selection_required(state, ctx) {
         return Some("Select an API key for this harness to continue.".to_string());

@@ -69,6 +69,13 @@ impl CliAgentPluginManager for ClaudeCodePluginManager {
         check_installed(&claude_dir)
     }
 
+    fn is_platform_plugin_installed(&self) -> bool {
+        let Ok(claude_dir) = claude_home_dir() else {
+            return false;
+        };
+        check_platform_plugin_installed(&claude_dir)
+    }
+
     /// Runs `claude plugin` CLI commands via the session shell.
     async fn install(&self) -> Result<(), PluginInstallError> {
         let mut log = String::new();
@@ -212,6 +219,14 @@ static UPDATE_INSTRUCTIONS: LazyLock<PluginInstructions> = LazyLock::new(|| Plug
 });
 
 fn check_installed(claude_dir: &Path) -> bool {
+    check_plugin_installed(claude_dir, PLUGIN_KEY)
+}
+
+fn check_platform_plugin_installed(claude_dir: &Path) -> bool {
+    check_plugin_installed(claude_dir, PLATFORM_PLUGIN_KEY)
+}
+
+fn check_plugin_installed(claude_dir: &Path, plugin_key: &str) -> bool {
     let plugins_path = claude_dir.join("plugins").join("installed_plugins.json");
     let Ok(contents) = fs::read_to_string(plugins_path) else {
         return false;
@@ -221,7 +236,7 @@ fn check_installed(claude_dir: &Path) -> bool {
     };
     parsed
         .get("plugins")
-        .and_then(|p| p.get(PLUGIN_KEY))
+        .and_then(|p| p.get(plugin_key))
         .and_then(|v| v.as_array())
         .map(|arr| !arr.is_empty())
         .unwrap_or(false)
