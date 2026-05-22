@@ -53,6 +53,22 @@ pub enum Entry {
     File(FileMetadata),
     Directory(DirectoryEntry),
 }
+#[derive(Clone, Copy)]
+pub(crate) struct BuildTreeOptions<'a> {
+    pub max_depth: usize,
+    pub current_depth: usize,
+    pub ignored_path_strategy: &'a IgnoredPathStrategy,
+    pub ignored_path_interests: &'a [PathBuf],
+}
+
+impl<'a> BuildTreeOptions<'a> {
+    fn child(self) -> Self {
+        Self {
+            current_depth: self.current_depth + 1,
+            ..self
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, Hash, Eq, PartialEq)]
 pub struct FileId(usize);
@@ -106,24 +122,23 @@ impl Entry {
             files,
             gitignores,
             remaining_file_quota,
-            max_depth,
-            current_depth,
-            ignored_path_strategy,
-            &[],
+            BuildTreeOptions {
+                max_depth,
+                current_depth,
+                ignored_path_strategy,
+                ignored_path_interests: &[],
+            },
         )
     }
 
     /// Builds a tree of entries from a given path, loading ignored paths that match
     /// one of the supplied component-sequence interests instead of leaving them lazy.
-    pub fn build_tree_with_ignored_path_interests(
+    pub(crate) fn build_tree_with_ignored_path_interests(
         path: impl Into<PathBuf>,
         files: &mut Vec<FileMetadata>,
         gitignores: &mut Vec<Gitignore>,
         mut remaining_file_quota: Option<&mut usize>,
-        max_depth: usize,
-        current_depth: usize,
-        ignored_path_strategy: &IgnoredPathStrategy,
-        ignored_path_interests: &[PathBuf],
+        options: BuildTreeOptions<'_>,
     ) -> Result<Self, BuildTreeError> {
         let curr_path: PathBuf = path.into();
         let is_dir = curr_path.is_dir();
@@ -147,10 +162,10 @@ impl Entry {
         ) || is_git_internal_path(&curr_path);
 
         // If we've reached the max depth, force lazy-loading even of non-ignored folders.
-        let mut lazy_load = current_depth >= max_depth;
+        let mut lazy_load = options.current_depth >= options.max_depth;
 
         if path_is_ignored {
-            match ignored_path_strategy {
+            match options.ignored_path_strategy {
                 IgnoredPathStrategy::Exclude => {
                     return Err(BuildTreeError::Ignored);
                 }
@@ -162,7 +177,8 @@ impl Entry {
                     }
                 }
                 IgnoredPathStrategy::IncludeLazy => {
-                    lazy_load = !matches_ignored_path_interest(&curr_path, ignored_path_interests);
+                    lazy_load =
+                        !matches_ignored_path_interest(&curr_path, options.ignored_path_interests);
                 }
                 IgnoredPathStrategy::Include => {}
             }
@@ -213,10 +229,7 @@ impl Entry {
                                 files,
                                 gitignores,
                                 remaining_file_quota.as_deref_mut(),
-                                max_depth,
-                                current_depth + 1,
-                                ignored_path_strategy,
-                                ignored_path_interests,
+                                options.child(),
                             ) {
                                 Ok(entry) => Some(entry),
                                 Err(BuildTreeError::ExceededMaxFileLimit) => {
