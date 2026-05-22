@@ -154,15 +154,10 @@ impl QueuedQueryModel {
     }
 
     /// Pops the first row in the queue and returns it.
-<<<<<<< HEAD
-    /// Used by the error/cancel drain path where the caller restores the popped text to the
-    /// input editor.
-=======
     /// Used by the non-clean drain path (Error / Cancelled) to restore a single popped
     /// prompt to the input editor. No-ops when the head is locked
     /// ([`QueuedQuery::is_locked`]) so a status-transition arriving before the lifecycle
     /// cleanup events cannot clobber the locked initial Cloud Mode row.
->>>>>>> 0887b970 (clean up spec and unify some paths)
     pub fn pop_front(&mut self, ctx: &mut ModelContext<Self>) -> Option<QueuedQuery> {
         if self.queue.first()?.is_locked() {
             return None;
@@ -177,25 +172,11 @@ impl QueuedQueryModel {
         Some(popped)
     }
 
-<<<<<<< HEAD
-    /// Auto-fire drain entry point. Pops the first row and tells the caller whether to submit
-    /// it normally or treat it as a popped edit-mode row (per the spec, the last-committed text
-    /// is restored to the input box).
-    pub fn pop_for_autofire(&mut self, ctx: &mut ModelContext<Self>) -> Option<AutofireAction> {
-=======
     /// Auto-fire drain entry point.
     /// Returns `None` for empty queues or when the head is locked
     /// ([`QueuedQuery::is_locked`]); otherwise pops the first row and returns whether
     /// the caller should submit it normally or treat it as a popped edit-mode row.
-    ///
-    /// `edit_text_override` lets the caller pass the live editor buffer text when the first
-    /// row is in edit mode (the model only tracks committed row text).
-    pub fn pop_for_autofire(
-        &mut self,
-        edit_text_override: Option<String>,
-        ctx: &mut ModelContext<Self>,
-    ) -> Option<AutofireAction> {
->>>>>>> 0887b970 (clean up spec and unify some paths)
+    pub fn pop_for_autofire(&mut self, ctx: &mut ModelContext<Self>) -> Option<AutofireAction> {
         let first = self.queue.first()?;
         if first.is_locked() {
             return None;
@@ -300,14 +281,9 @@ impl QueuedQueryModel {
         ctx.emit(QueuedQueryEvent::Reordered);
     }
 
-<<<<<<< HEAD
     /// Enters edit mode for `query_id`. If another row was being edited, that edit is cancelled
-    /// (its text is unchanged, per the spec).
-=======
-    /// Enters edit mode for `query_id`. If another row was being edited, that edit is implicitly
-    /// committed (its current row text remains as-is).
-    /// No-ops when the target row is locked ([`QueuedQuery::is_locked`]).
->>>>>>> 0887b970 (clean up spec and unify some paths)
+    /// (its text is unchanged). No-ops when the target row is locked
+    /// ([`QueuedQuery::is_locked`]).
     pub fn enter_edit_mode(&mut self, query_id: QueuedQueryId, ctx: &mut ModelContext<Self>) {
         let row_is_editable = self
             .queue

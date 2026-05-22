@@ -5860,10 +5860,6 @@ impl TerminalView {
                         ConversationStatus::InProgress | ConversationStatus::Blocked { .. } => None,
                     };
                     if let Some(finish_reason) = finish_reason {
-<<<<<<< HEAD
-=======
-                        let _ = conversation_id;
->>>>>>> 0887b970 (clean up spec and unify some paths)
                         self.handle_finished_conversation(finish_reason, ctx);
                     }
                 }
