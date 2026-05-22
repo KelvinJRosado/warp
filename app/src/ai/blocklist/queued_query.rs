@@ -52,6 +52,13 @@ impl QueuedQuery {
     pub fn origin(&self) -> QueuedQueryOrigin {
         self.origin
     }
+
+    /// Returns true if this row is locked from user mutation, reorder, and auto-fire.
+    /// Currently only the locked initial Cloud Mode row is non-mutable; lifecycle code
+    /// removes it explicitly via [`QueuedQueryModel::remove_initial_cloud_mode_row`].
+    pub fn is_locked(&self) -> bool {
+        matches!(self.origin, QueuedQueryOrigin::InitialCloudMode)
+    }
 }
 
 /// What the auto-fire drain should do with a popped row.
@@ -147,10 +154,17 @@ impl QueuedQueryModel {
     }
 
     /// Pops the first row in the queue and returns it.
+<<<<<<< HEAD
     /// Used by the error/cancel drain path where the caller restores the popped text to the
     /// input editor.
+=======
+    /// Used by the non-clean drain path (Error / Cancelled) to restore a single popped
+    /// prompt to the input editor. No-ops when the head is locked
+    /// ([`QueuedQuery::is_locked`]) so a status-transition arriving before the lifecycle
+    /// cleanup events cannot clobber the locked initial Cloud Mode row.
+>>>>>>> 0887b970 (clean up spec and unify some paths)
     pub fn pop_front(&mut self, ctx: &mut ModelContext<Self>) -> Option<QueuedQuery> {
-        if self.queue.is_empty() {
+        if self.queue.first()?.is_locked() {
             return None;
         }
         let popped = self.queue.remove(0);
@@ -163,12 +177,27 @@ impl QueuedQueryModel {
         Some(popped)
     }
 
+<<<<<<< HEAD
     /// Auto-fire drain entry point. Pops the first row and tells the caller whether to submit
     /// it normally or treat it as a popped edit-mode row (per the spec, the last-committed text
     /// is restored to the input box).
     pub fn pop_for_autofire(&mut self, ctx: &mut ModelContext<Self>) -> Option<AutofireAction> {
+=======
+    /// Auto-fire drain entry point.
+    /// Returns `None` for empty queues or when the head is locked
+    /// ([`QueuedQuery::is_locked`]); otherwise pops the first row and returns whether
+    /// the caller should submit it normally or treat it as a popped edit-mode row.
+    ///
+    /// `edit_text_override` lets the caller pass the live editor buffer text when the first
+    /// row is in edit mode (the model only tracks committed row text).
+    pub fn pop_for_autofire(
+        &mut self,
+        edit_text_override: Option<String>,
+        ctx: &mut ModelContext<Self>,
+    ) -> Option<AutofireAction> {
+>>>>>>> 0887b970 (clean up spec and unify some paths)
         let first = self.queue.first()?;
-        if first.origin == QueuedQueryOrigin::InitialCloudMode {
+        if first.is_locked() {
             return None;
         }
         let first_in_edit_mode = self.editing == Some(first.id);
@@ -188,13 +217,15 @@ impl QueuedQueryModel {
     }
 
     /// Removes a specific row by id, if present. Returns the removed row.
+    /// No-ops when the target row is locked ([`QueuedQuery::is_locked`]); the locked
+    /// initial Cloud Mode row is only removable via [`Self::remove_initial_cloud_mode_row`].
     pub fn remove_by_id(
         &mut self,
         query_id: QueuedQueryId,
         ctx: &mut ModelContext<Self>,
     ) -> Option<QueuedQuery> {
         let idx = self.queue.iter().position(|q| q.id == query_id)?;
-        if self.queue[idx].origin == QueuedQueryOrigin::InitialCloudMode {
+        if self.queue[idx].is_locked() {
             return None;
         }
         let removed = self.queue.remove(idx);
@@ -248,6 +279,8 @@ impl QueuedQueryModel {
 
     /// Moves the row identified by `source_id` to position `target_index` within the queue.
     /// `target_index` is interpreted as the index in the post-removal list.
+    /// No-ops when the source row is locked ([`QueuedQuery::is_locked`]) or when the move would
+    /// displace a locked row off the head of the queue.
     pub fn reorder(
         &mut self,
         source_id: QueuedQueryId,
@@ -257,13 +290,8 @@ impl QueuedQueryModel {
         let Some(source_idx) = self.queue.iter().position(|q| q.id == source_id) else {
             return;
         };
-        if self.queue[source_idx].origin == QueuedQueryOrigin::InitialCloudMode
-            || (target_index == 0
-                && self
-                    .queue
-                    .first()
-                    .is_some_and(|row| row.origin == QueuedQueryOrigin::InitialCloudMode))
-        {
+        let head_is_locked = self.queue.first().is_some_and(|row| row.is_locked());
+        if self.queue[source_idx].is_locked() || (target_index == 0 && head_is_locked) {
             return;
         }
         let row = self.queue.remove(source_idx);
@@ -272,13 +300,19 @@ impl QueuedQueryModel {
         ctx.emit(QueuedQueryEvent::Reordered);
     }
 
+<<<<<<< HEAD
     /// Enters edit mode for `query_id`. If another row was being edited, that edit is cancelled
     /// (its text is unchanged, per the spec).
+=======
+    /// Enters edit mode for `query_id`. If another row was being edited, that edit is implicitly
+    /// committed (its current row text remains as-is).
+    /// No-ops when the target row is locked ([`QueuedQuery::is_locked`]).
+>>>>>>> 0887b970 (clean up spec and unify some paths)
     pub fn enter_edit_mode(&mut self, query_id: QueuedQueryId, ctx: &mut ModelContext<Self>) {
         let row_is_editable = self
             .queue
             .iter()
-            .any(|r| r.id == query_id && r.origin != QueuedQueryOrigin::InitialCloudMode);
+            .any(|r| r.id == query_id && !r.is_locked());
         if !row_is_editable {
             return;
         }

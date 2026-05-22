@@ -13407,6 +13407,11 @@ impl Input {
             return false;
         }
 
+<<<<<<< HEAD
+=======
+        // Gate on having a selected conversation so we don't queue while the agent view
+        // is closed; the queue is per-terminal-view and no longer keyed by conversation id.
+>>>>>>> 0887b970 (clean up spec and unify some paths)
         if self
             .ai_context_model
             .as_ref(ctx)

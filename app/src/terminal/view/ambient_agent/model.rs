@@ -1179,11 +1179,7 @@ impl AmbientAgentViewModel {
     /// first-time dispatch and by [`Self::submit_handoff`] to start the stream once the
     /// handoff snapshot has settled, without re-running the UI transition that
     /// [`Self::queue_handoff_auto_submit`] already performed.
-    fn start_spawn_stream(
-        &mut self,
-        mut request: SpawnAgentRequest,
-        ctx: &mut ModelContext<Self>,
-    ) {
+    fn start_spawn_stream(&mut self, mut request: SpawnAgentRequest, ctx: &mut ModelContext<Self>) {
         request.interactive = Some(true);
         self.request = Some(request.clone());
         let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
@@ -1608,8 +1604,7 @@ impl AmbientAgentViewModel {
         }
         let initial_snapshot_token = handoff.snapshot_upload.initial_snapshot_token();
         let forked_conversation_id = handoff.forked_conversation_id.clone();
-        let already_dispatched =
-            matches!(handoff.submission_state, HandoffSubmissionState::Queued);
+        let already_dispatched = matches!(handoff.submission_state, HandoffSubmissionState::Queued);
         handoff.submission_state = HandoffSubmissionState::Starting;
         ctx.emit(AmbientAgentViewModelEvent::PendingHandoffChanged);
 

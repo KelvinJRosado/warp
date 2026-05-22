@@ -5421,9 +5421,10 @@ impl TerminalView {
         ai_block_model: &AIBlockModelImpl<AIBlock>,
         ctx: &mut ViewContext<Self>,
     ) {
-        if self.pending_user_query_kind != Some(PendingUserQueryKind::CloudMode)
-            && !FeatureFlag::QueuedPromptsV2.is_enabled()
-        {
+        let kind_is_cloud_mode =
+            self.pending_user_query_kind == Some(PendingUserQueryKind::CloudMode);
+        let v2_is_enabled = FeatureFlag::QueuedPromptsV2.is_enabled();
+        if !kind_is_cloud_mode && !v2_is_enabled {
             return;
         }
 
@@ -5435,10 +5436,16 @@ impl TerminalView {
                 .display_user_query(initial_conversation_query.as_ref())
                 .is_some()
         });
-        if has_renderable_user_query {
-            self.remove_pending_user_query_block(ctx);
-            self.remove_cloud_mode_queue_row(ctx);
+        if !has_renderable_user_query {
+            return;
         }
+        // Pending-user-query block removal stays scoped to the legacy CloudMode kind so we
+        // don't tear down /queue or other PendingUserQueryKind blocks under V2. The V2
+        // queue-row removal is independent and is a no-op when no InitialCloudMode row exists.
+        if kind_is_cloud_mode {
+            self.remove_pending_user_query_block(ctx);
+        }
+        self.remove_cloud_mode_queue_row(ctx);
     }
     fn render_owner_for_ai_history_event(
         &self,
@@ -5853,6 +5860,10 @@ impl TerminalView {
                         ConversationStatus::InProgress | ConversationStatus::Blocked { .. } => None,
                     };
                     if let Some(finish_reason) = finish_reason {
+<<<<<<< HEAD
+=======
+                        let _ = conversation_id;
+>>>>>>> 0887b970 (clean up spec and unify some paths)
                         self.handle_finished_conversation(finish_reason, ctx);
                     }
                 }
