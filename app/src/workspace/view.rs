@@ -13592,7 +13592,6 @@ impl Workspace {
             submission_state: HandoffSubmissionState::Idle,
             auto_submit: launch,
             source_conversation_in_progress: false,
-            submitted_with_empty_prompt: false,
         };
         model_handle.update(ctx, |model, model_ctx| {
             model.set_pending_handoff(Some(pending), model_ctx);
@@ -13775,7 +13774,7 @@ impl Workspace {
         } else if telemetry_source_in_progress {
             crate::ai::ambient_agents::telemetry::HandoffInjectionPath::Continue
         } else {
-            crate::ai::ambient_agents::telemetry::HandoffInjectionPath::SnapshotRehydrationOnly
+            crate::ai::ambient_agents::telemetry::HandoffInjectionPath::SnapshotRehydration
         };
 
         send_telemetry_from_ctx!(
@@ -14056,7 +14055,6 @@ impl Workspace {
             submission_state: HandoffSubmissionState::Idle,
             auto_submit: launch,
             source_conversation_in_progress,
-            submitted_with_empty_prompt: false,
         };
         model_handle.update(ctx, |model, model_ctx| {
             model.set_pending_handoff(Some(pending), model_ctx);

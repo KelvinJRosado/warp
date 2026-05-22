@@ -134,20 +134,6 @@ impl SnapshotUploadStatus {
     }
 }
 
-/// Drives the context-aware queued-prompt indicator for empty-prompt handoff.
-/// Returned by `AmbientAgentViewModel::empty_prompt_handoff_indicator` so the
-/// view layer can render a label decoupled from the substituted wire prompt.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EmptyPromptHandoffIndicator {
-    /// Source conversation was in-progress / blocked. The client substituted
-    /// `"continue in the cloud"` on the wire.
-    Continue,
-    /// Source conversation was idle and the touched-workspace snapshot has
-    /// content. The cloud agent will use the server's snapshot rehydration
-    /// message as its only synthetic input.
-    SnapshotRehydrationOnly,
-}
-
 /// Per-pane handoff context. Seeded by the chip / slash command's open path on a
 /// fresh cloud-mode pane and consumed by `submit_handoff`. Its presence is the
 /// single source of truth for "this pane is in handoff mode" via
@@ -175,15 +161,9 @@ pub(crate) struct PendingHandoff {
     /// blocked at the time the user submitted the handoff. Captured once at
     /// handoff initiation so the substitution decision is deterministic and
     /// local-to-cloud-only — the server never sees an in-progress signal it
-    /// has to interpret. Drives the empty-prompt `continue in the cloud`
-    /// substitution and the queued-prompt indicator copy.
+    /// has to interpret. Drives the empty-prompt `"Continue"` substitution
+    /// in `build_handoff_spawn_request`.
     pub(crate) source_conversation_in_progress: bool,
-    /// True when the last submit consumed an empty prompt. Set in
-    /// `queue_handoff_auto_submit` / `submit_handoff` so the queued-prompt
-    /// indicator can render context-appropriate copy without re-deriving the
-    /// original user intent from the wire prompt (which may have been
-    /// substituted to `"continue in the cloud"`).
-    pub(crate) submitted_with_empty_prompt: bool,
 }
 
 /// Status of the ambient agent run.
@@ -577,44 +557,6 @@ impl AmbientAgentViewModel {
         }
     }
 
-    /// Returns the queued-prompt indicator variant to render when the last
-    /// handoff submit consumed an empty prompt. Returns `None` when:
-    ///   - `FeatureFlag::EmptyPromptHandoff` is disabled,
-    ///   - no handoff is pending,
-    ///   - the submit carried a non-empty prompt (existing rendering applies), or
-    ///   - the source was idle with no snapshot content (the standard
-    ///     `Setting up environment` indicator covers it).
-    ///
-    /// Decoupled from `request.prompt` so the substituted wire string
-    /// (`"continue in the cloud"`) never appears as user-visible text.
-    pub(crate) fn empty_prompt_handoff_indicator(&self) -> Option<EmptyPromptHandoffIndicator> {
-        #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-        {
-            if !FeatureFlag::EmptyPromptHandoff.is_enabled() {
-                return None;
-            }
-            let handoff = self.pending_handoff.as_ref()?;
-            if !handoff.submitted_with_empty_prompt {
-                return None;
-            }
-            if handoff.source_conversation_in_progress {
-                return Some(EmptyPromptHandoffIndicator::Continue);
-            }
-            let has_snapshot_content = handoff
-                .touched_workspace
-                .as_ref()
-                .is_some_and(|w| !w.repos.is_empty() || !w.orphan_files.is_empty());
-            if has_snapshot_content {
-                return Some(EmptyPromptHandoffIndicator::SnapshotRehydrationOnly);
-            }
-            None
-        }
-        #[cfg(not(all(feature = "local_fs", not(target_family = "wasm"))))]
-        {
-            None
-        }
-    }
-
     /// True when this pane is a handoff pane and the touched-workspace derivation +
     /// snapshot upload have both settled and no submission is in flight. Used by the
     /// input layer to gate clearing the editor buffer on submit.
@@ -700,17 +642,25 @@ impl AmbientAgentViewModel {
 
     /// Build the `SpawnAgentRequest` for a handoff submit.
     ///
-    /// `prompt` is the user's submitted prompt. If it is `None` or an empty
-    /// string, the request is built as an empty-prompt handoff:
-    ///   - If the source conversation's tail exchange was in-progress / blocked
-    ///     at handoff time, the wire prompt is substituted with
-    ///     `"continue in the cloud"` so the cloud agent picks up where the
-    ///     local agent left off. This substitution is local-to-cloud-only.
-    ///   - Otherwise, the wire prompt is sent as `None` and the cloud agent
-    ///     starts from the forked conversation history (and, when present, the
-    ///     server's snapshot rehydration system message). The worker derives
-    ///     `--skip-initial-turn` for the sandboxed CLI from the execution
-    ///     input (empty prompt + no snapshot token) at dispatch time.
+    /// `prompt` is the user's submitted prompt. When it is `None` or an empty
+    /// string, the request is built as an empty-prompt handoff and the wire
+    /// prompt is selected client-side per the resolved design:
+    ///   - **In-progress source.** When the source conversation's tail
+    ///     exchange was in-progress / blocked at handoff initiation, the wire
+    ///     prompt is substituted with `"Continue"`. The same string drives the
+    ///     queued-prompt indicator (wire == display).
+    ///   - **Idle source + non-empty snapshot token.** When the source is idle
+    ///     and `initial_snapshot_token` is `Some(non-empty)`, the wire prompt
+    ///     is substituted with
+    ///     `"Apply the workspace changes from my previous session."` so the
+    ///     cloud agent's first user-role turn carries an intent for the
+    ///     rehydrated workspace state. The snapshot token still rides on the
+    ///     wire alongside the substituted prompt.
+    ///   - **Idle source + no snapshot token.** The wire prompt is sent as
+    ///     `None`; the worker derives `--skip-initial-turn` for the sandboxed
+    ///     CLI from the execution input at dispatch time.
+    ///
+    /// Both substitutions are local-to-cloud-only.
     #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
     fn build_handoff_spawn_request(
         &self,
@@ -725,10 +675,16 @@ impl AmbientAgentViewModel {
             .pending_handoff
             .as_ref()
             .is_some_and(|h| h.source_conversation_in_progress);
+        let has_snapshot_content = initial_snapshot_token
+            .as_ref()
+            .is_some_and(|token| !token.as_str().is_empty());
 
         let effective_prompt: Option<String> = match prompt {
             Some(p) if !p.is_empty() => Some(p),
-            _ if source_in_progress => Some("continue in the cloud".to_owned()),
+            _ if source_in_progress => Some("Continue".to_owned()),
+            _ if has_snapshot_content => {
+                Some("Apply the workspace changes from my previous session.".to_owned())
+            }
             _ => None,
         };
 
@@ -776,12 +732,10 @@ impl AmbientAgentViewModel {
         };
 
         // An empty `PendingCloudLaunch.prompt` is a valid empty-prompt handoff;
-        // `build_handoff_spawn_request` handles the `continue in the cloud` /
-        // `None` substitution based on the captured source-conversation state.
+        // `build_handoff_spawn_request` decides what to send on the wire based
+        // on the captured source-conversation state and the snapshot token
+        // (which the queue path never has yet — only `submit_handoff` does).
         let prompt = (!launch.prompt.is_empty()).then_some(launch.prompt);
-        if let Some(handoff) = self.pending_handoff.as_mut() {
-            handoff.submitted_with_empty_prompt = prompt.is_none();
-        }
         self.request = Some(self.build_handoff_spawn_request(
             prompt,
             launch.attachments.request_attachments,
@@ -1717,9 +1671,6 @@ impl AmbientAgentViewModel {
         // prompt is unusual on the manual path (input.rs gates it) but treat
         // it the same way the auto-submit path does.
         let prompt = (!prompt.is_empty()).then_some(prompt);
-        if let Some(handoff) = self.pending_handoff.as_mut() {
-            handoff.submitted_with_empty_prompt = prompt.is_none();
-        }
         let request = self.build_handoff_spawn_request(
             prompt,
             attachments,

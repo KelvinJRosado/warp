@@ -4022,12 +4022,22 @@ impl Input {
         }
 
         let prompt = self.editor.as_ref(ctx).buffer_text(ctx).trim().to_owned();
-        // With `EmptyPromptHandoff` off, `&` Enter on an empty buffer remains a
-        // no-op (we swallow the Enter so the input keeps the compose draft).
-        // With the flag on, an empty buffer is a valid empty-prompt handoff:
-        // fall through and build a `PendingCloudLaunch` with an empty prompt;
-        // `build_handoff_spawn_request` decides what to send on the wire.
-        if prompt.is_empty() && !FeatureFlag::EmptyPromptHandoff.is_enabled() {
+        // `&` Enter on an empty buffer:
+        //   - Pre-feature: no-op (swallow the Enter so the input keeps the
+        //     compose draft).
+        //   - With `EmptyPromptHandoff` on AND the source conversation has
+        //     content: fall through and build a `PendingCloudLaunch` with an
+        //     empty prompt; `build_handoff_spawn_request` decides what to send
+        //     on the wire.
+        //   - With the flag on but the source conversation is missing or
+        //     empty (the guardrail): no-op, same as pre-feature.
+        if prompt.is_empty()
+            && !(FeatureFlag::EmptyPromptHandoff.is_enabled()
+                && crate::ai::blocklist::handoff::source_conversation_has_content(
+                    self.terminal_view_id,
+                    ctx,
+                ))
+        {
             return true;
         }
 

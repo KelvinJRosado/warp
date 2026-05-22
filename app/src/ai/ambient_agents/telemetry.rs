@@ -44,14 +44,14 @@ pub enum HandoffInjectionPath {
     /// The handoff carried a non-empty user prompt; no client-side injection.
     #[default]
     None,
-    /// Empty prompt + in-progress source. The client substituted
-    /// `"continue in the cloud"` on the wire so the cloud agent picks up
-    /// where the local agent left off.
+    /// Empty prompt + in-progress source. The client substituted `"Continue"`
+    /// on the wire so the cloud agent picks up where the local agent left off.
     Continue,
-    /// Empty prompt + idle source. The cloud agent relies on the server's
-    /// snapshot-rehydration system message (when a snapshot exists) and
-    /// otherwise starts from the forked conversation history alone.
-    SnapshotRehydrationOnly,
+    /// Empty prompt + idle source. The client substituted
+    /// `"Apply the workspace changes from my previous session."` on the wire
+    /// alongside the snapshot token; the cloud agent's first user-role turn
+    /// carries an intent for the rehydrated workspace state.
+    SnapshotRehydration,
 }
 
 /// Telemetry events for client interactions with cloud agents.
@@ -122,7 +122,7 @@ pub enum CloudAgentTelemetryEvent {
     /// The async snapshot-upload pipeline that backs a handoff has settled.
     /// Fires once per handoff after `derive_touched_workspace` completes.
     /// Pair with `HandoffInitiated` on the same run to learn whether the
-    /// `SnapshotRehydrationOnly` injection actually had snapshot content.
+    /// `SnapshotRehydration` injection actually had snapshot content.
     #[cfg_attr(target_family = "wasm", allow(dead_code))]
     HandoffSnapshotPrepared {
         /// True when the derived `TouchedWorkspace` had at least one repo or

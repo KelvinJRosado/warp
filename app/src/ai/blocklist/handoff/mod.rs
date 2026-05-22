@@ -14,6 +14,11 @@
 //! `AmbientAgentViewModel::submit_handoff`, which reads the cached
 //! `forked_conversation_id` and `snapshot_upload` off `PendingHandoff`.
 
+#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+use warpui::{AppContext, EntityId, SingletonEntity};
+
+#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+use super::BlocklistAIHistoryModel;
 use super::PendingAttachment;
 use crate::server::server_api::ai::AttachmentInput;
 
@@ -37,4 +42,21 @@ pub struct HandoffLaunchAttachments {
 pub struct PendingCloudLaunch {
     pub(crate) prompt: String,
     pub(crate) attachments: HandoffLaunchAttachments,
+}
+
+/// Returns `true` when the active conversation owned by `terminal_view_id`
+/// exists and has at least one exchange. Empty-prompt handoff entry points
+/// (chip, `&` Enter on empty buffer, `/handoff` with no argument) call this
+/// to gate the immediate-handoff path: without a source conversation
+/// carrying content, the empty-prompt flow has nothing to fork or
+/// rehydrate, so each entry point falls back to pre-feature behavior.
+#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+pub(crate) fn source_conversation_has_content(
+    terminal_view_id: EntityId,
+    ctx: &AppContext,
+) -> bool {
+    BlocklistAIHistoryModel::handle(ctx)
+        .as_ref(ctx)
+        .active_conversation(terminal_view_id)
+        .is_some_and(|conversation| !conversation.is_empty())
 }
