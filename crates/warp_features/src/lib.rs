@@ -940,6 +940,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::SshRemoteServer,
     FeatureFlag::DragTabsToWindows,
     FeatureFlag::RemoteCodebaseIndexing,
+    FeatureFlag::AsyncFind,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).
