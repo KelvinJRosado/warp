@@ -13,6 +13,7 @@ impl QueuedQueryId {
 }
 
 /// Where a queued prompt came from.
+/// The origin is informational for telemetry; FIFO ordering and firing semantics are uniform.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QueuedQueryOrigin {
     /// Filed while the initial Cloud Mode prompt waits to be handed off.
