@@ -10,6 +10,11 @@ use super::display_menu::GenericMenuItem;
 use crate::completer::SessionContext;
 use crate::ui_components::icons::Icon;
 
+/// Maximum number of directory entries to convert into menu items.
+/// Directories with more entries than this will be truncated to avoid
+/// excessive memory allocation (see Sentry issue 7259255054).
+const MAX_DIRECTORY_ENTRIES: usize = 10_000;
+
 /// DirectoryFetcher model that caches directory state and provides an explicit refetch API
 pub struct DirectoryFetcher {
     current_directory: String,
@@ -94,10 +99,13 @@ impl DirectoryFetcher {
         // Use SessionContext to get directory entries (works for both local and remote sessions)
         let entries = session_context.list_directory_entries(typed_path).await;
 
-        // Convert EngineDirEntry to GenericMenuItem, filtering out hidden files
+        // Convert EngineDirEntry to GenericMenuItem, filtering out hidden files.
+        // Cap at MAX_DIRECTORY_ENTRIES to prevent unbounded memory allocation when
+        // a directory contains a very large number of files.
         let mut items: Vec<DirectoryItem> = entries
             .iter()
             .filter(|entry| !entry.is_hidden()) // Skip hidden files (starting with '.')
+            .take(MAX_DIRECTORY_ENTRIES)
             .map(engine_entry_to_menu_item)
             .collect();
 

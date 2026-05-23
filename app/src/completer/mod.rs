@@ -46,7 +46,7 @@ pub struct SessionContext {
     #[cfg(feature = "completions_v2")]
     js_ctx: Option<js::SessionJsExecutionContext>,
 
-    cached_directory_entries: dashmap::DashMap<TypedPathBuf, Arc<Vec<EngineDirEntry>>>,
+    cached_directory_entries: Arc<dashmap::DashMap<TypedPathBuf, Arc<Vec<EngineDirEntry>>>>,
 
     /// Snapshot of all Warp workflow aliases.
     workflow_aliases: HashMap<String, String>,
