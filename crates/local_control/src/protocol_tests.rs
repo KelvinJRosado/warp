@@ -47,9 +47,14 @@ fn ambiguous_target_error_code_is_stable() {
 }
 
 #[test]
-fn input_run_is_not_in_the_allowlisted_catalog() {
-    let action = serde_json::from_value::<ActionKind>(serde_json::json!("input.run"));
-    assert!(action.is_err());
+fn input_run_is_in_the_allowlisted_catalog() {
+    let action = serde_json::from_value::<ActionKind>(serde_json::json!("input.run"))
+        .expect("input.run deserializes");
+    assert_eq!(action, ActionKind::InputRun);
+    assert_eq!(
+        action.metadata().implementation_status,
+        ActionImplementationStatus::Implemented
+    );
 }
 
 #[test]
@@ -204,10 +209,7 @@ fn underlying_data_actions_require_underlying_data_permission_and_authenticated_
         assert!(metadata.authenticated_user.required);
         assert_eq!(
             metadata.allowed_invocation_contexts,
-            vec![
-                InvocationContext::InsideWarp,
-                InvocationContext::OutsideWarp
-            ]
+            vec![InvocationContext::OutsideWarp]
         );
     }
 }

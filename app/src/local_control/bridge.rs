@@ -12,6 +12,7 @@ use warpui::{Entity, ModelContext, SingletonEntity};
 use crate::local_control::handlers::{data, layout, metadata, settings_surfaces};
 use crate::local_control::permissions::{
     ensure_action_allowed, ensure_authenticated_user_matches, ensure_feature_enabled,
+    ensure_input_run_policy_allows,
 };
 use crate::local_control::resolver::validate_action_params;
 
@@ -287,6 +288,24 @@ impl LocalControlBridge {
                     .action
                     .params_as()
                     .and_then(|params| data::list_history(&request.target, params, ctx))
+                {
+                    Ok(data) => ResponseEnvelope::ok(request.request_id, data),
+                    Err(error) => ResponseEnvelope::error(request.request_id, error),
+                }
+            }
+            ActionKind::InputRun => {
+                if let Err(error) =
+                    ensure_action_allowed(grant.invocation_context, request.action.kind, ctx)
+                {
+                    return ResponseEnvelope::error(request.request_id, error);
+                }
+                if let Err(error) = ensure_input_run_policy_allows(&grant, &request.action) {
+                    return ResponseEnvelope::error(request.request_id, error);
+                }
+                match request
+                    .action
+                    .params_as()
+                    .and_then(|params| data::run_input_command(&request.target, params, ctx))
                 {
                     Ok(data) => ResponseEnvelope::ok(request.request_id, data),
                     Err(error) => ResponseEnvelope::error(request.request_id, error),

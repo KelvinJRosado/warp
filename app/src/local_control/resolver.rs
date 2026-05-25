@@ -1,8 +1,8 @@
 //! Target and parameter validation for the first local-control action slice.
 use crate::local_control::handlers::metadata::action_metadata_for_name;
 use ::local_control::protocol::{
-    ActionGetParams, BlockGetParams, BlockListParams, HistoryListParams, PaneTarget, SessionTarget,
-    SettingGetParams, TabTarget, TargetSelector, WindowTarget,
+    ActionGetParams, BlockGetParams, BlockListParams, HistoryListParams, InputRunParams,
+    PaneTarget, SessionTarget, SettingGetParams, TabTarget, TargetSelector, WindowTarget,
 };
 use ::local_control::{ActionKind, ControlError, ErrorCode};
 use warpui::ModelContext;
@@ -99,6 +99,15 @@ pub(crate) fn validate_action_params(action: &::local_control::Action) -> Result
             Ok(())
         }),
         ActionKind::HistoryList => action.params_as::<HistoryListParams>().map(|_| ()),
+        ActionKind::InputRun => action.params_as::<InputRunParams>().and_then(|params| {
+            if params.command.trim().is_empty() {
+                return Err(ControlError::new(
+                    ErrorCode::InvalidParams,
+                    "input.run requires a non-empty command",
+                ));
+            }
+            Ok(())
+        }),
         _ => Ok(()),
     }
 }

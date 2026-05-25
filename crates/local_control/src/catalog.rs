@@ -193,6 +193,8 @@ pub enum ActionKind {
     InputClear,
     #[serde(rename = "input.mode.set")]
     InputModeSet,
+    #[serde(rename = "input.run")]
+    InputRun,
     #[serde(rename = "history.list")]
     HistoryList,
     #[serde(rename = "theme.list")]
@@ -263,6 +265,7 @@ impl ActionKind {
         Self::InputReplace,
         Self::InputClear,
         Self::InputModeSet,
+        Self::InputRun,
         Self::HistoryList,
         Self::ThemeList,
         Self::ThemeSet,
@@ -321,6 +324,7 @@ impl ActionKind {
             Self::InputReplace => "input.replace",
             Self::InputClear => "input.clear",
             Self::InputModeSet => "input.mode.set",
+            Self::InputRun => "input.run",
             Self::HistoryList => "history.list",
             Self::ThemeList => "theme.list",
             Self::ThemeSet => "theme.set",
@@ -352,6 +356,7 @@ impl ActionKind {
             | Self::BlockList
             | Self::BlockGet
             | Self::InputGet
+            | Self::InputRun
             | Self::HistoryList
             | Self::ThemeList
             | Self::AppearanceGet
@@ -421,6 +426,7 @@ impl ActionKind {
             | Self::InputReplace
             | Self::InputClear
             | Self::InputModeSet
+            | Self::InputRun
             | Self::WindowClose
             | Self::TabClose
             | Self::PaneClose => RiskTier::MutatingDestructiveOrExecution,
@@ -482,9 +488,11 @@ impl ActionKind {
             | Self::AppearanceSet
             | Self::AppearanceFontSize
             | Self::AppearanceZoom => StateDataCategory::MetadataConfigurationMutation,
-            Self::InputInsert | Self::InputReplace | Self::InputClear | Self::InputModeSet => {
-                StateDataCategory::UnderlyingDataMutation
-            }
+            Self::InputInsert
+            | Self::InputReplace
+            | Self::InputClear
+            | Self::InputModeSet
+            | Self::InputRun => StateDataCategory::UnderlyingDataMutation,
             Self::AppFocus
             | Self::AppSettingsOpen
             | Self::AppCommandPaletteOpen
@@ -527,7 +535,11 @@ impl ActionKind {
     }
     fn default_requires_authenticated_user(self) -> bool {
         match self {
-            Self::BlockList | Self::BlockGet | Self::InputGet | Self::HistoryList => true,
+            Self::BlockList
+            | Self::BlockGet
+            | Self::InputGet
+            | Self::InputRun
+            | Self::HistoryList => true,
             Self::InstanceList
             | Self::AppPing
             | Self::AppInspect
@@ -573,7 +585,8 @@ impl ActionKind {
             | Self::InputInsert
             | Self::InputReplace
             | Self::InputClear
-            | Self::InputModeSet => TargetScope::Session,
+            | Self::InputModeSet
+            | Self::InputRun => TargetScope::Session,
             Self::BlockList | Self::BlockGet => TargetScope::Block,
             Self::HistoryList => TargetScope::History,
             Self::ThemeList

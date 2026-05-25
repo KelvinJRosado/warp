@@ -28,9 +28,9 @@ pub use protocol::{
     AppearanceStateResult, BlockGetParams, BlockGetResult, BlockListParams, BlockListResult,
     BlockSummary, ControlError, ControlResponse, EmptyParams, ErrorCode, ErrorResponseEnvelope,
     ExecutionContextProof, HistoryEntrySummary, HistoryListParams, HistoryListResult,
-    InputGetParams, InputStateResult, PROTOCOL_VERSION, PaneListResult, PaneSummary,
-    RequestEnvelope, ResponseEnvelope, SessionListResult, SessionSummary, SettingGetParams,
-    SettingGetResult, SettingListParams, SettingListResult, SettingSummary, TabListResult,
-    TabSummary, ThemeListResult, ThemeSummary, WindowListResult, WindowSummary,
+    InputGetParams, InputRunParams, InputStateResult, PROTOCOL_VERSION, PaneListResult,
+    PaneSummary, RequestEnvelope, ResponseEnvelope, SessionListResult, SessionSummary,
+    SettingGetParams, SettingGetResult, SettingListParams, SettingListResult, SettingSummary,
+    TabListResult, TabSummary, ThemeListResult, ThemeSummary, WindowListResult, WindowSummary,
 };
 pub use selectors::{PaneSelector, SessionSelector, TabSelector, TargetSelector, WindowSelector};
