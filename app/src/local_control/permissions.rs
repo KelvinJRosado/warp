@@ -3,10 +3,18 @@ use crate::auth::AuthStateProvider;
 use crate::features::FeatureFlag;
 use crate::settings::{LocalControlPermissionCategory, LocalControlSettings};
 use ::local_control::auth::CredentialGrant;
-use ::local_control::{ActionKind, ControlError, ErrorCode, InvocationContext, PermissionCategory};
+use ::local_control::{
+    Action, ActionKind, ControlError, ErrorCode, InvocationContext, PermissionCategory,
+};
 use warpui::{ModelContext, SingletonEntity};
 
 use crate::local_control::LocalControlBridge;
+
+#[cfg(test)]
+use std::sync::atomic::{AtomicBool, Ordering};
+
+#[cfg(test)]
+static TEST_ALLOW_INPUT_RUN_POLICY: AtomicBool = AtomicBool::new(false);
 
 pub(super) fn warp_control_cli_enabled() -> bool {
     FeatureFlag::WarpControlCli.is_enabled()
@@ -180,6 +188,50 @@ pub(crate) fn ensure_scripting_grant_for_settings(
         ));
     }
     Ok(())
+}
+
+pub(crate) fn ensure_input_run_policy_allows(
+    grant: &CredentialGrant,
+    action: &Action,
+) -> Result<(), ControlError> {
+    if input_run_policy_allows(grant, action) {
+        return Ok(());
+    }
+    Err(ControlError::new(
+        ErrorCode::InsufficientPermissions,
+        "input.run requires explicit local approval policy before command execution",
+    ))
+}
+
+#[cfg(not(test))]
+fn input_run_policy_allows(_grant: &CredentialGrant, _action: &Action) -> bool {
+    false
+}
+
+#[cfg(test)]
+fn input_run_policy_allows(grant: &CredentialGrant, action: &Action) -> bool {
+    grant.action == ActionKind::InputRun
+        && action.kind == ActionKind::InputRun
+        && TEST_ALLOW_INPUT_RUN_POLICY.load(Ordering::SeqCst)
+}
+
+#[cfg(test)]
+pub(crate) fn allow_input_run_policy_for_test() -> TestInputRunPolicyGuard {
+    TestInputRunPolicyGuard {
+        previous: TEST_ALLOW_INPUT_RUN_POLICY.swap(true, Ordering::SeqCst),
+    }
+}
+
+#[cfg(test)]
+pub(crate) struct TestInputRunPolicyGuard {
+    previous: bool,
+}
+
+#[cfg(test)]
+impl Drop for TestInputRunPolicyGuard {
+    fn drop(&mut self) {
+        TEST_ALLOW_INPUT_RUN_POLICY.store(self.previous, Ordering::SeqCst);
+    }
 }
 
 pub(super) fn ensure_authenticated_user_matches(

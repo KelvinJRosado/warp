@@ -462,7 +462,8 @@ impl ActionKind {
             | Self::DriveUpdate
             | Self::DriveDelete
             | Self::DriveRun
-            | Self::DriveInsert => ActionImplementationStatus::Implemented,
+            | Self::DriveInsert
+            | Self::InputRun => ActionImplementationStatus::Implemented,
             _ => ActionImplementationStatus::Stub,
         };
         let requires_authenticated_user = self.default_requires_authenticated_user();
@@ -786,7 +787,8 @@ impl ActionKind {
             | Self::DriveUpdate
             | Self::DriveDelete
             | Self::DriveRun
-            | Self::DriveInsert => {
+            | Self::DriveInsert
+            | Self::InputRun => {
                 return vec![InvocationContext::OutsideWarp];
             }
             _ => ActionImplementationStatus::Stub,

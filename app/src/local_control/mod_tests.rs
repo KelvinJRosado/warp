@@ -7,8 +7,8 @@ use ::local_control::protocol::{
     Action, ControlResponse, DriveCreateParams, DriveDeleteParams, DriveInsertParams,
     DriveMutationResult, DriveObjectSelector, DriveObjectType, DriveRunParams, DriveTarget,
     DriveUpdateParams, FileDeleteParams, FileMutationResult, FileTarget, FileWriteParams,
-    PaneSelector, PaneTarget, SessionSelector, SessionTarget, TabSelector, TabTarget,
-    TargetSelector, WindowSelector, WindowTarget,
+    InputRunParams, PaneSelector, PaneTarget, SessionSelector, SessionTarget, TabSelector,
+    TabTarget, TargetSelector, WindowSelector, WindowTarget,
 };
 use ::local_control::{
     ErrorCode, InstanceId, InvocationContext, PermissionCategory, RequestEnvelope,
@@ -19,7 +19,8 @@ use warp_core::features::FeatureFlag;
 use warpui::{App, SingletonEntity};
 
 use super::{
-    action_metadata_for_name, appearance_state_result, capabilities, ensure_feature_enabled,
+    action_metadata_for_name, allow_input_run_policy_for_test, appearance_state_result,
+    capabilities, ensure_feature_enabled, ensure_input_run_policy_allows,
     ensure_scripting_grant_for_settings, ensure_settings_allow_action,
     outside_warp_action_enabled_for_settings, rejected_setting_key, require_active_window_id,
     resolve_file_mutation_path, setting_get_result, setting_list_result, theme_list_result,
@@ -417,7 +418,6 @@ fn capabilities_advertises_core_metadata_and_layout_mutation_actions() {
     assert!(caps.contains(&ActionKind::PaneMaximize));
     assert!(caps.contains(&ActionKind::PaneResize));
     assert!(!caps.contains(&ActionKind::TabRename));
-    assert!(!caps.contains(&ActionKind::InputRun));
 }
 
 #[test]
@@ -430,6 +430,7 @@ fn capabilities_advertises_session_and_input_mutation_actions() {
     assert!(caps.contains(&ActionKind::InputReplace));
     assert!(caps.contains(&ActionKind::InputClear));
     assert!(caps.contains(&ActionKind::InputModeSet));
+    assert!(caps.contains(&ActionKind::InputRun));
 }
 
 #[test]
@@ -1505,6 +1506,7 @@ fn action_metadata_lookup_reports_implemented_status_for_new_mutations() {
         "app.ai_assistant.toggle",
         "app.code_review.toggle",
         "app.vertical_tabs.toggle",
+        "input.run",
     ] {
         let metadata = action_metadata_for_name(action_name)
             .unwrap_or_else(|_| panic!("{action_name} should be allowlisted"));
@@ -2043,6 +2045,214 @@ fn drive_run_and_insert_fail_closed_without_policy_approval() {
             );
         });
     })
+}
+
+fn authenticated_input_run_grant() -> CredentialGrant {
+    let mut grant = CredentialGrant::new(
+        InstanceId("test-instance".to_owned()),
+        ActionKind::InputRun,
+        InvocationContext::OutsideWarp,
+        Duration::minutes(5),
+    );
+    grant.authenticated_user.subject = Some("test_user_uid".to_owned());
+    grant.scripting_grant = Some(scripting_grant());
+    grant
+}
+
+fn enable_outside_warp_input_run(app: &mut App) {
+    app.update(|ctx| {
+        LocalControlSettings::handle(ctx).update(ctx, |settings, ctx| {
+            let _ = settings.allow_outside_warp_control.set_value(true, ctx);
+            let _ = settings
+                .allow_outside_warp_underlying_data_mutations
+                .set_value(true, ctx);
+            let _ = settings
+                .allow_outside_warp_authenticated_user_actions
+                .set_value(true, ctx);
+        });
+    });
+}
+
+#[test]
+fn input_run_rejects_empty_command_params() {
+    let err = validate_action_params(
+        &Action::with_params(
+            ActionKind::InputRun,
+            InputRunParams {
+                command: "  \t  ".to_owned(),
+            },
+        )
+        .expect("input.run params serialize"),
+    )
+    .expect_err("whitespace-only command is rejected");
+    assert_eq!(err.code, ErrorCode::InvalidParams);
+
+    validate_action_params(
+        &Action::with_params(
+            ActionKind::InputRun,
+            InputRunParams {
+                command: "cargo check".to_owned(),
+            },
+        )
+        .expect("input.run params serialize"),
+    )
+    .expect("non-empty command is accepted");
+}
+
+#[test]
+fn mutating_underlying_data_permission_separates_from_app_state() {
+    assert_eq!(
+        ActionKind::InputRun.metadata().permission_category,
+        PermissionCategory::MutateUnderlyingData
+    );
+    assert_ne!(
+        ActionKind::InputRun.metadata().permission_category,
+        PermissionCategory::MutateAppState
+    );
+
+    let mut tampered_grant = CredentialGrant::new(
+        InstanceId("test-instance".to_owned()),
+        ActionKind::InputRun,
+        InvocationContext::OutsideWarp,
+        Duration::minutes(5),
+    );
+    tampered_grant.permission_category = PermissionCategory::MutateAppState;
+    tampered_grant.authenticated_user.subject = Some("test_user_uid".to_owned());
+
+    let err = tampered_grant
+        .verify_for_action(ActionKind::InputRun)
+        .expect_err("app-state mutation category does not satisfy command execution");
+    assert_eq!(err.code, ErrorCode::InsufficientPermissions);
+}
+
+#[test]
+fn input_run_policy_gate_fails_closed_and_allows_test_override() {
+    let action = Action::with_params(
+        ActionKind::InputRun,
+        InputRunParams {
+            command: "echo hi".to_owned(),
+        },
+    )
+    .expect("input.run params serialize");
+    let grant = authenticated_input_run_grant();
+
+    let err = ensure_input_run_policy_allows(&grant, &action)
+        .expect_err("input.run policy fails closed by default");
+    assert_eq!(err.code, ErrorCode::InsufficientPermissions);
+
+    let guard = allow_input_run_policy_for_test();
+    ensure_input_run_policy_allows(&grant, &action).expect("test policy override allows input.run");
+    drop(guard);
+
+    let err = ensure_input_run_policy_allows(&grant, &action)
+        .expect_err("policy reverts to closed after guard drops");
+    assert_eq!(err.code, ErrorCode::InsufficientPermissions);
+}
+
+#[test]
+fn input_run_denials_happen_before_selector_resolution() {
+    let _flag = FeatureFlag::WarpControlCli.override_enabled(true);
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+        app.add_singleton_model(|_| AuthStateProvider::new_for_test());
+        enable_outside_warp_input_run(&mut app);
+        let bridge = app.add_model(LocalControlBridge::new);
+
+        let stale_request = RequestEnvelope {
+            target: TargetSelector {
+                window: Some(WindowTarget::Id {
+                    id: WindowSelector("stale-window".to_owned()),
+                }),
+                ..TargetSelector::default()
+            },
+            ..RequestEnvelope::new(
+                Action::with_params(
+                    ActionKind::InputRun,
+                    InputRunParams {
+                        command: "echo hi".to_owned(),
+                    },
+                )
+                .expect("input.run params serialize"),
+            )
+        };
+
+        bridge.update(&mut app, |bridge, ctx| {
+            let mut wrong_perm_grant = authenticated_input_run_grant();
+            wrong_perm_grant.permission_category = PermissionCategory::MutateAppState;
+            let response = bridge.handle_request(stale_request.clone(), wrong_perm_grant, ctx);
+            assert_eq!(
+                response_error_code(response),
+                ErrorCode::InsufficientPermissions,
+                "tampered permission category is rejected before selector resolution"
+            );
+
+            let mut spoofed_grant = authenticated_input_run_grant();
+            spoofed_grant.authenticated_user.subject = Some("spoofed-uid".to_owned());
+            let response = bridge.handle_request(stale_request.clone(), spoofed_grant, ctx);
+            assert_eq!(
+                response_error_code(response),
+                ErrorCode::AuthenticatedUserMismatch,
+                "spoofed auth subject is rejected before selector resolution"
+            );
+
+            let valid_grant = authenticated_input_run_grant();
+            let response = bridge.handle_request(stale_request.clone(), valid_grant, ctx);
+            assert_eq!(
+                response_error_code(response),
+                ErrorCode::InsufficientPermissions,
+                "policy gate blocks execution before selector resolution"
+            );
+        });
+    });
+}
+
+#[test]
+fn input_run_reaches_target_resolution_only_with_explicit_policy_gate() {
+    let _flag = FeatureFlag::WarpControlCli.override_enabled(true);
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+        app.add_singleton_model(|_| AuthStateProvider::new_for_test());
+        enable_outside_warp_input_run(&mut app);
+        let bridge = app.add_model(LocalControlBridge::new);
+
+        let request = RequestEnvelope::new(
+            Action::with_params(
+                ActionKind::InputRun,
+                InputRunParams {
+                    command: "echo hi".to_owned(),
+                },
+            )
+            .expect("input.run params serialize"),
+        );
+
+        bridge.update(&mut app, |bridge, ctx| {
+            let guard = allow_input_run_policy_for_test();
+            let response =
+                bridge.handle_request(request, authenticated_input_run_grant(), ctx);
+            assert_eq!(
+                response_error_code(response),
+                ErrorCode::MissingTarget,
+                "with policy gate open, execution reaches target resolution and fails on missing window"
+            );
+            drop(guard);
+        });
+    });
+}
+
+#[test]
+fn accepted_command_and_agent_prompt_submission_remain_unavailable() {
+    let excluded = [
+        "accepted_command.submit",
+        "agent.prompt.submit",
+        "input.agent_prompt",
+        "shell.exec",
+    ];
+    for name in excluded {
+        assert!(
+            ActionKind::ALL.iter().all(|kind| kind.as_str() != name),
+            "{name} must not be an allowlisted local-control action"
+        );
+    }
 }
 
 #[test]
