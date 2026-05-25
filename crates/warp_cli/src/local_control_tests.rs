@@ -187,6 +187,142 @@ fn rejects_non_metadata_and_future_catalog_commands_not_in_this_shard() {
 }
 
 #[test]
+fn parses_tab_activate_commands() {
+    assert!(matches!(
+        ControlArgs::try_parse_from(["warpctrl", "tab", "activate"])
+            .expect("tab activate parses")
+            .command,
+        ControlCommand::Tab(TabCommand::Activate(_))
+    ));
+    assert!(matches!(
+        ControlArgs::try_parse_from(["warpctrl", "tab", "previous"])
+            .expect("tab previous parses")
+            .command,
+        ControlCommand::Tab(TabCommand::Previous(_))
+    ));
+    assert!(matches!(
+        ControlArgs::try_parse_from(["warpctrl", "tab", "next"])
+            .expect("tab next parses")
+            .command,
+        ControlCommand::Tab(TabCommand::Next(_))
+    ));
+    assert!(matches!(
+        ControlArgs::try_parse_from(["warpctrl", "tab", "last"])
+            .expect("tab last parses")
+            .command,
+        ControlCommand::Tab(TabCommand::Last(_))
+    ));
+}
+
+#[test]
+fn parses_tab_move_with_direction() {
+    let args = ControlArgs::try_parse_from(["warpctrl", "tab", "move", "--direction", "left"])
+        .expect("tab move parses");
+    assert!(matches!(
+        args.command,
+        ControlCommand::Tab(TabCommand::Move(_))
+    ));
+
+    assert!(ControlArgs::try_parse_from(["warpctrl", "tab", "move"]).is_err());
+}
+
+#[test]
+fn parses_tab_rename_with_optional_title() {
+    let args = ControlArgs::try_parse_from(["warpctrl", "tab", "rename", "My Tab"])
+        .expect("tab rename with title parses");
+    let ControlCommand::Tab(TabCommand::Rename(rename)) = args.command else {
+        panic!("expected tab rename command");
+    };
+    assert_eq!(rename.title.as_deref(), Some("My Tab"));
+    assert!(!rename.reset);
+
+    let args = ControlArgs::try_parse_from(["warpctrl", "tab", "rename", "--reset"])
+        .expect("tab rename --reset parses");
+    let ControlCommand::Tab(TabCommand::Rename(rename)) = args.command else {
+        panic!("expected tab rename command");
+    };
+    assert!(rename.reset);
+}
+
+#[test]
+fn parses_tab_close_with_scope() {
+    assert!(matches!(
+        ControlArgs::try_parse_from(["warpctrl", "tab", "close"])
+            .expect("tab close parses without scope")
+            .command,
+        ControlCommand::Tab(TabCommand::Close(_))
+    ));
+    assert!(matches!(
+        ControlArgs::try_parse_from(["warpctrl", "tab", "close", "--scope", "others"])
+            .expect("tab close with scope parses")
+            .command,
+        ControlCommand::Tab(TabCommand::Close(_))
+    ));
+}
+
+#[test]
+fn parses_pane_mutation_commands() {
+    assert!(matches!(
+        ControlArgs::try_parse_from(["warpctrl", "pane", "split", "--direction", "right"])
+            .expect("pane split parses")
+            .command,
+        ControlCommand::Pane(PaneCommand::Split(_))
+    ));
+    assert!(ControlArgs::try_parse_from(["warpctrl", "pane", "split"]).is_err());
+
+    assert!(matches!(
+        ControlArgs::try_parse_from(["warpctrl", "pane", "focus"])
+            .expect("pane focus parses")
+            .command,
+        ControlCommand::Pane(PaneCommand::Focus(_))
+    ));
+
+    assert!(matches!(
+        ControlArgs::try_parse_from(["warpctrl", "pane", "navigate", "--direction", "left"])
+            .expect("pane navigate parses")
+            .command,
+        ControlCommand::Pane(PaneCommand::Navigate(_))
+    ));
+    assert!(ControlArgs::try_parse_from(["warpctrl", "pane", "navigate"]).is_err());
+
+    assert!(matches!(
+        ControlArgs::try_parse_from(["warpctrl", "pane", "close"])
+            .expect("pane close parses")
+            .command,
+        ControlCommand::Pane(PaneCommand::Close(_))
+    ));
+
+    assert!(matches!(
+        ControlArgs::try_parse_from(["warpctrl", "pane", "maximize"])
+            .expect("pane maximize parses without enabled")
+            .command,
+        ControlCommand::Pane(PaneCommand::Maximize(_))
+    ));
+    assert!(matches!(
+        ControlArgs::try_parse_from(["warpctrl", "pane", "maximize", "--enabled", "true"])
+            .expect("pane maximize parses with enabled")
+            .command,
+        ControlCommand::Pane(PaneCommand::Maximize(_))
+    ));
+
+    assert!(matches!(
+        ControlArgs::try_parse_from([
+            "warpctrl",
+            "pane",
+            "resize",
+            "--direction",
+            "up",
+            "--amount",
+            "3"
+        ])
+        .expect("pane resize parses")
+        .command,
+        ControlCommand::Pane(PaneCommand::Resize(_))
+    ));
+    assert!(ControlArgs::try_parse_from(["warpctrl", "pane", "resize"]).is_err());
+}
+
+#[test]
 fn generated_bash_completions_include_metadata_commands() {
     let completions =
         generate_completion_string(Shell::Bash).expect("bash completions render to UTF-8");

@@ -1,7 +1,9 @@
 //! Implementations for user-facing `warpctrl` command groups.
 use local_control::protocol::{
     Action, ActionGetParams, ActionKind, ActionMetadata, ControlError, EmptyParams, ErrorCode,
-    RequestEnvelope,
+    PaneFocusParams, PaneMaximizeParams, PaneNavigateParams, PaneResizeParams, PaneSplitParams,
+    RequestEnvelope, TabActivateParams, TabActivationTarget, TabCloseParams, TabCloseScope,
+    TabMoveParams, TabRenameParams,
 };
 use local_control::selection::select_instance;
 use serde::Serialize;
@@ -11,9 +13,10 @@ use crate::agent::OutputFormat;
 use crate::local_control::output::{write_json, write_json_line};
 use crate::local_control::selectors::instance_selector;
 use crate::local_control::{
-    ActionCommand, AppCommand, AppearanceCommand, BlockCommand, HistoryCommand, InputCommand,
-    InstanceCommand, PaneCommand, SessionCommand, SettingCommand, TabCommand, TargetArgs,
-    ThemeCommand, WindowCommand,
+    ActionCommand, AppCommand, AppearanceCommand, BlockCommand, HistoryCommand,
+    HorizontalDirectionArg, InputCommand, InstanceCommand, PaneCommand, PaneDirectionArg,
+    SessionCommand, SettingCommand, TabCloseScopeArg, TabCommand, TargetArgs, ThemeCommand,
+    WindowCommand,
 };
 
 /// Display-oriented projection of a discoverable Warp instance.
@@ -150,6 +153,60 @@ pub(super) fn run_tab_command(
         TabCommand::Create(args) => {
             run_action(args, ActionKind::TabCreate, json!({}), output_format)
         }
+        TabCommand::Activate(args) => run_action_with_params(
+            args,
+            ActionKind::TabActivate,
+            TabActivateParams { relative: None },
+            output_format,
+        ),
+        TabCommand::Previous(args) => run_action_with_params(
+            args,
+            ActionKind::TabActivate,
+            TabActivateParams {
+                relative: Some(TabActivationTarget::Previous),
+            },
+            output_format,
+        ),
+        TabCommand::Next(args) => run_action_with_params(
+            args,
+            ActionKind::TabActivate,
+            TabActivateParams {
+                relative: Some(TabActivationTarget::Next),
+            },
+            output_format,
+        ),
+        TabCommand::Last(args) => run_action_with_params(
+            args,
+            ActionKind::TabActivate,
+            TabActivateParams {
+                relative: Some(TabActivationTarget::Last),
+            },
+            output_format,
+        ),
+        TabCommand::Move(args) => run_action_with_params(
+            args.target,
+            ActionKind::TabMove,
+            TabMoveParams {
+                direction: horizontal_direction(args.direction),
+            },
+            output_format,
+        ),
+        TabCommand::Rename(args) => run_action_with_params(
+            args.target,
+            ActionKind::TabRename,
+            TabRenameParams {
+                title: if args.reset { None } else { args.title },
+            },
+            output_format,
+        ),
+        TabCommand::Close(args) => run_action_with_params(
+            args.target,
+            ActionKind::TabClose,
+            TabCloseParams {
+                scope: tab_close_scope(args.scope),
+            },
+            output_format,
+        ),
     }
 }
 
@@ -161,6 +218,73 @@ pub(super) fn run_pane_command(
         PaneCommand::List(args) => {
             run_action_with_params(args, ActionKind::PaneList, EmptyParams {}, output_format)
         }
+        PaneCommand::Split(args) => run_action_with_params(
+            args.target,
+            ActionKind::PaneSplit,
+            PaneSplitParams {
+                direction: pane_direction(args.direction),
+                profile: None,
+            },
+            output_format,
+        ),
+        PaneCommand::Focus(args) => run_action_with_params(
+            args,
+            ActionKind::PaneFocus,
+            PaneFocusParams::default(),
+            output_format,
+        ),
+        PaneCommand::Navigate(args) => run_action_with_params(
+            args.target,
+            ActionKind::PaneNavigate,
+            PaneNavigateParams {
+                direction: pane_direction(args.direction),
+            },
+            output_format,
+        ),
+        PaneCommand::Close(args) => {
+            run_action(args, ActionKind::PaneClose, json!({}), output_format)
+        }
+        PaneCommand::Maximize(args) => run_action_with_params(
+            args.target,
+            ActionKind::PaneMaximize,
+            PaneMaximizeParams {
+                enabled: args.enabled,
+            },
+            output_format,
+        ),
+        PaneCommand::Resize(args) => run_action_with_params(
+            args.target,
+            ActionKind::PaneResize,
+            PaneResizeParams {
+                direction: pane_direction(args.direction),
+                amount: args.amount,
+            },
+            output_format,
+        ),
+    }
+}
+
+fn horizontal_direction(direction: HorizontalDirectionArg) -> local_control::HorizontalDirection {
+    match direction {
+        HorizontalDirectionArg::Left => local_control::HorizontalDirection::Left,
+        HorizontalDirectionArg::Right => local_control::HorizontalDirection::Right,
+    }
+}
+
+fn tab_close_scope(scope: TabCloseScopeArg) -> TabCloseScope {
+    match scope {
+        TabCloseScopeArg::Target => TabCloseScope::Target,
+        TabCloseScopeArg::Others => TabCloseScope::Others,
+        TabCloseScopeArg::Right => TabCloseScope::Right,
+    }
+}
+
+fn pane_direction(direction: PaneDirectionArg) -> local_control::PaneDirection {
+    match direction {
+        PaneDirectionArg::Left => local_control::PaneDirection::Left,
+        PaneDirectionArg::Right => local_control::PaneDirection::Right,
+        PaneDirectionArg::Up => local_control::PaneDirection::Up,
+        PaneDirectionArg::Down => local_control::PaneDirection::Down,
     }
 }
 

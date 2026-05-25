@@ -1,8 +1,10 @@
 //! Target and parameter validation for the first local-control action slice.
 use crate::local_control::handlers::metadata::action_metadata_for_name;
 use ::local_control::protocol::{
-    ActionGetParams, BlockGetParams, BlockListParams, HistoryListParams, PaneTarget, SessionTarget,
-    SettingGetParams, TabTarget, TargetSelector, WindowTarget,
+    ActionGetParams, BlockGetParams, BlockListParams, HistoryListParams, PaneMaximizeParams,
+    PaneNavigateParams, PaneResizeParams, PaneSplitParams, PaneTarget, SessionTarget,
+    SettingGetParams, TabActivateParams, TabCloseParams, TabMoveParams, TabRenameParams, TabTarget,
+    TargetSelector, WindowTarget,
 };
 use ::local_control::{ActionKind, ControlError, ErrorCode};
 use warpui::ModelContext;
@@ -82,12 +84,22 @@ pub(crate) fn validate_action_params(action: &::local_control::Action) -> Result
         | ActionKind::WindowList
         | ActionKind::TabList
         | ActionKind::TabCreate
+        | ActionKind::PaneFocus
+        | ActionKind::PaneClose
         | ActionKind::PaneList
         | ActionKind::SessionList
         | ActionKind::InputGet
         | ActionKind::ThemeList
         | ActionKind::AppearanceGet
         | ActionKind::SettingList => validate_empty_action_params(action),
+        ActionKind::TabActivate => action.params_as::<TabActivateParams>().map(|_| ()),
+        ActionKind::TabMove => action.params_as::<TabMoveParams>().map(|_| ()),
+        ActionKind::TabRename => action.params_as::<TabRenameParams>().map(|_| ()),
+        ActionKind::TabClose => action.params_as::<TabCloseParams>().map(|_| ()),
+        ActionKind::PaneSplit => action.params_as::<PaneSplitParams>().map(|_| ()),
+        ActionKind::PaneNavigate => action.params_as::<PaneNavigateParams>().map(|_| ()),
+        ActionKind::PaneMaximize => action.params_as::<PaneMaximizeParams>().map(|_| ()),
+        ActionKind::PaneResize => action.params_as::<PaneResizeParams>().map(|_| ()),
         ActionKind::BlockList => action.params_as::<BlockListParams>().map(|_| ()),
         ActionKind::BlockGet => action.params_as::<BlockGetParams>().and_then(|params| {
             if params.block_id.is_empty() {

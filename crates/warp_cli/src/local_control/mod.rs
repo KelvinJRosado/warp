@@ -185,13 +185,39 @@ pub enum TabCommand {
     List(TargetArgs),
     /// Create a new terminal tab in the active window.
     Create(TargetArgs),
+    /// Activate a target tab.
+    Activate(TargetArgs),
+    /// Activate the previous tab.
+    Previous(TargetArgs),
+    /// Activate the next tab.
+    Next(TargetArgs),
+    /// Activate the last tab.
+    Last(TargetArgs),
+    /// Move a target tab left or right.
+    Move(TabMoveArgs),
+    /// Rename or reset a target tab title.
+    Rename(TabRenameArgs),
+    /// Close a target tab or tab group.
+    Close(TabCloseArgs),
 }
 
-/// Commands that inspect local Warp panes.
+/// Commands that control panes in the selected Warp app instance.
 #[derive(Debug, Clone, Subcommand)]
 pub enum PaneCommand {
     /// List panes in the selected local Warp app.
     List(TargetArgs),
+    /// Split a pane.
+    Split(PaneSplitArgs),
+    /// Focus a pane.
+    Focus(TargetArgs),
+    /// Navigate pane focus in a direction.
+    Navigate(PaneNavigateArgs),
+    /// Close a pane.
+    Close(TargetArgs),
+    /// Toggle or set pane maximization.
+    Maximize(PaneMaximizeArgs),
+    /// Resize a pane divider.
+    Resize(PaneResizeArgs),
 }
 /// Commands that inspect local Warp sessions.
 
@@ -293,6 +319,104 @@ pub struct SettingGetArgs {
 
     /// Allowlisted setting key.
     pub key: String,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct TabMoveArgs {
+    #[command(flatten)]
+    pub target: TargetArgs,
+
+    /// Direction to move the tab.
+    #[arg(long = "direction", value_enum)]
+    pub direction: HorizontalDirectionArg,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct TabRenameArgs {
+    #[command(flatten)]
+    pub target: TargetArgs,
+
+    /// New title for the tab. Omit to reset to the default title.
+    pub title: Option<String>,
+
+    /// Reset the tab title to its default.
+    #[arg(long = "reset")]
+    pub reset: bool,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct TabCloseArgs {
+    #[command(flatten)]
+    pub target: TargetArgs,
+
+    /// Scope of the close operation.
+    #[arg(long = "scope", value_enum, default_value_t = TabCloseScopeArg::Target)]
+    pub scope: TabCloseScopeArg,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct PaneSplitArgs {
+    #[command(flatten)]
+    pub target: TargetArgs,
+
+    /// Direction to split the pane.
+    #[arg(long = "direction", value_enum)]
+    pub direction: PaneDirectionArg,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct PaneNavigateArgs {
+    #[command(flatten)]
+    pub target: TargetArgs,
+
+    /// Direction to navigate pane focus.
+    #[arg(long = "direction", value_enum)]
+    pub direction: PaneDirectionArg,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct PaneMaximizeArgs {
+    #[command(flatten)]
+    pub target: TargetArgs,
+
+    /// Set maximization on or off. Omit to toggle.
+    #[arg(long = "enabled")]
+    pub enabled: Option<bool>,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct PaneResizeArgs {
+    #[command(flatten)]
+    pub target: TargetArgs,
+
+    /// Direction to resize the pane divider.
+    #[arg(long = "direction", value_enum)]
+    pub direction: PaneDirectionArg,
+
+    /// Number of resize steps.
+    #[arg(long = "amount")]
+    pub amount: Option<u32>,
+}
+
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+pub enum HorizontalDirectionArg {
+    Left,
+    Right,
+}
+
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+pub enum TabCloseScopeArg {
+    Target,
+    Others,
+    Right,
+}
+
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+pub enum PaneDirectionArg {
+    Left,
+    Right,
+    Up,
+    Down,
 }
 
 pub fn run(args: ControlArgs) -> ExitCode {

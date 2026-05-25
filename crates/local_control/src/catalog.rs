@@ -347,7 +347,17 @@ impl ActionKind {
             | Self::WindowList
             | Self::TabList
             | Self::TabCreate
+            | Self::TabActivate
+            | Self::TabMove
+            | Self::TabRename
+            | Self::TabClose
             | Self::PaneList
+            | Self::PaneSplit
+            | Self::PaneFocus
+            | Self::PaneNavigate
+            | Self::PaneClose
+            | Self::PaneMaximize
+            | Self::PaneResize
             | Self::SessionList
             | Self::BlockList
             | Self::BlockGet
@@ -538,7 +548,17 @@ impl ActionKind {
             | Self::WindowList
             | Self::TabList
             | Self::TabCreate
+            | Self::TabActivate
+            | Self::TabMove
+            | Self::TabRename
+            | Self::TabClose
             | Self::PaneList
+            | Self::PaneSplit
+            | Self::PaneFocus
+            | Self::PaneNavigate
+            | Self::PaneClose
+            | Self::PaneMaximize
+            | Self::PaneResize
             | Self::SessionList
             | Self::ThemeList
             | Self::AppearanceGet

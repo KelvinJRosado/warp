@@ -419,6 +419,10 @@ async fn handle_control_request(
 }
 
 #[cfg(test)]
+pub(crate) use handlers::layout::{
+    select_single_tab_entry_for_mutation, validate_tab_rename_target,
+};
+#[cfg(test)]
 pub(crate) use handlers::metadata::action_metadata_for_name;
 #[cfg(test)]
 pub(crate) use handlers::settings_surfaces::{

@@ -15,8 +15,9 @@ use warpui::{App, SingletonEntity};
 use super::{
     action_metadata_for_name, appearance_state_result, capabilities, ensure_feature_enabled,
     ensure_settings_allow_action, outside_warp_action_enabled_for_settings, rejected_setting_key,
-    require_active_window_id, setting_get_result, setting_list_result, theme_list_result,
-    validate_action_params, validate_tab_create_target, LocalControlBridge,
+    require_active_window_id, select_single_tab_entry_for_mutation, setting_get_result,
+    setting_list_result, theme_list_result, validate_action_params, validate_tab_create_target,
+    validate_tab_rename_target, LocalControlBridge,
 };
 use crate::settings::{
     AllowOutsideWarpAppStateMutations, AllowOutsideWarpControl,
@@ -25,6 +26,7 @@ use crate::settings::{
     LocalControlSettings,
 };
 use crate::test_util::settings::initialize_settings_for_tests;
+use ::local_control::protocol::{HorizontalDirection, PaneDirection, TabCloseScope};
 
 fn settings_with_values(
     outside_control: bool,
@@ -75,6 +77,17 @@ fn enable_outside_warp_metadata_reads(app: &mut App) {
             let _ = settings.allow_outside_warp_control.set_value(true, ctx);
             let _ = settings
                 .allow_outside_warp_metadata_reads
+                .set_value(true, ctx);
+        });
+    });
+}
+
+fn enable_outside_warp_app_state_mutations(app: &mut App) {
+    app.update(|ctx| {
+        LocalControlSettings::handle(ctx).update(ctx, |settings, ctx| {
+            let _ = settings.allow_outside_warp_control.set_value(true, ctx);
+            let _ = settings
+                .allow_outside_warp_app_state_mutations
                 .set_value(true, ctx);
         });
     });
@@ -171,7 +184,7 @@ fn tab_create_rejects_unsupported_selector_forms() {
 }
 
 #[test]
-fn capabilities_advertises_core_and_metadata_slice_actions() {
+fn capabilities_advertises_core_metadata_and_layout_mutation_actions() {
     assert_eq!(
         capabilities(),
         vec![
@@ -185,7 +198,17 @@ fn capabilities_advertises_core_and_metadata_slice_actions() {
             ActionKind::WindowList,
             ActionKind::TabList,
             ActionKind::TabCreate,
+            ActionKind::TabActivate,
+            ActionKind::TabMove,
+            ActionKind::TabRename,
+            ActionKind::TabClose,
             ActionKind::PaneList,
+            ActionKind::PaneSplit,
+            ActionKind::PaneFocus,
+            ActionKind::PaneNavigate,
+            ActionKind::PaneClose,
+            ActionKind::PaneMaximize,
+            ActionKind::PaneResize,
             ActionKind::SessionList,
             ActionKind::BlockList,
             ActionKind::BlockGet,
@@ -663,6 +686,459 @@ fn settings_and_appearance_bridge_handlers_return_success() {
             }
         }
     });
+}
+
+#[test]
+fn layout_mutation_actions_require_app_state_mutation_permission() {
+    let settings_with_app_state_mutations =
+        settings_with_values(true, false, false, true, false, false);
+    let settings_without_app_state_mutations =
+        settings_with_values(true, false, false, false, false, false);
+
+    for action in [
+        ActionKind::TabActivate,
+        ActionKind::TabMove,
+        ActionKind::TabRename,
+        ActionKind::TabClose,
+        ActionKind::PaneSplit,
+        ActionKind::PaneFocus,
+        ActionKind::PaneNavigate,
+        ActionKind::PaneClose,
+        ActionKind::PaneMaximize,
+        ActionKind::PaneResize,
+    ] {
+        assert_eq!(
+            action.metadata().permission_category,
+            PermissionCategory::MutateAppState,
+            "{} should require MutateAppState",
+            action.as_str()
+        );
+        ensure_settings_allow_action(
+            &settings_with_app_state_mutations,
+            InvocationContext::OutsideWarp,
+            action,
+        )
+        .unwrap_or_else(|err| {
+            panic!(
+                "{} should be allowed with app-state-mutation permission: {err}",
+                action.as_str()
+            )
+        });
+        let err = ensure_settings_allow_action(
+            &settings_without_app_state_mutations,
+            InvocationContext::OutsideWarp,
+            action,
+        )
+        .expect_err("app-state mutation should be denied without permission");
+        assert_eq!(err.code, ErrorCode::InsufficientPermissions);
+    }
+}
+
+#[test]
+fn layout_mutation_params_validate_without_error_for_valid_input() {
+    validate_action_params(&Action {
+        kind: ActionKind::TabActivate,
+        params: serde_json::json!({}),
+    })
+    .expect("tab.activate accepts empty params");
+
+    validate_action_params(&Action {
+        kind: ActionKind::TabActivate,
+        params: serde_json::json!({ "relative": "next" }),
+    })
+    .expect("tab.activate accepts relative param");
+
+    validate_action_params(&Action {
+        kind: ActionKind::TabMove,
+        params: serde_json::json!({ "direction": "left" }),
+    })
+    .expect("tab.move accepts direction param");
+
+    validate_action_params(&Action {
+        kind: ActionKind::TabRename,
+        params: serde_json::json!({}),
+    })
+    .expect("tab.rename accepts empty params");
+
+    validate_action_params(&Action {
+        kind: ActionKind::TabRename,
+        params: serde_json::json!({ "title": "My Tab" }),
+    })
+    .expect("tab.rename accepts title param");
+
+    validate_action_params(&Action {
+        kind: ActionKind::TabClose,
+        params: serde_json::json!({}),
+    })
+    .expect("tab.close accepts empty params");
+
+    validate_action_params(&Action {
+        kind: ActionKind::TabClose,
+        params: serde_json::json!({ "scope": "others" }),
+    })
+    .expect("tab.close accepts scope param");
+
+    validate_action_params(&Action {
+        kind: ActionKind::PaneSplit,
+        params: serde_json::json!({ "direction": "right" }),
+    })
+    .expect("pane.split accepts direction param");
+
+    validate_action_params(&Action {
+        kind: ActionKind::PaneFocus,
+        params: serde_json::json!({}),
+    })
+    .expect("pane.focus accepts empty params");
+
+    validate_action_params(&Action {
+        kind: ActionKind::PaneNavigate,
+        params: serde_json::json!({ "direction": "left" }),
+    })
+    .expect("pane.navigate accepts direction param");
+
+    validate_action_params(&Action {
+        kind: ActionKind::PaneClose,
+        params: serde_json::json!({}),
+    })
+    .expect("pane.close accepts empty params");
+
+    validate_action_params(&Action {
+        kind: ActionKind::PaneMaximize,
+        params: serde_json::json!({}),
+    })
+    .expect("pane.maximize accepts empty params");
+
+    validate_action_params(&Action {
+        kind: ActionKind::PaneMaximize,
+        params: serde_json::json!({ "enabled": true }),
+    })
+    .expect("pane.maximize accepts enabled param");
+
+    validate_action_params(&Action {
+        kind: ActionKind::PaneResize,
+        params: serde_json::json!({ "direction": "right" }),
+    })
+    .expect("pane.resize accepts direction param");
+
+    validate_action_params(&Action {
+        kind: ActionKind::PaneResize,
+        params: serde_json::json!({ "direction": "right", "amount": 3 }),
+    })
+    .expect("pane.resize accepts direction and amount");
+}
+
+#[test]
+fn tab_rename_target_validation_accepts_valid_targets() {
+    validate_tab_rename_target(&TargetSelector::default())
+        .expect("default target is accepted by tab.rename");
+
+    validate_tab_rename_target(&TargetSelector {
+        window: Some(WindowTarget::Active),
+        tab: Some(TabTarget::Active),
+        ..TargetSelector::default()
+    })
+    .expect("active window and tab target is accepted by tab.rename");
+
+    validate_tab_rename_target(&TargetSelector {
+        tab: Some(TabTarget::Id {
+            id: TabSelector("some-tab-id".to_owned()),
+        }),
+        ..TargetSelector::default()
+    })
+    .expect("concrete tab id is accepted by tab.rename");
+}
+
+#[test]
+fn tab_rename_target_validation_rejects_unsupported_family_selectors() {
+    let err = validate_tab_rename_target(&TargetSelector {
+        pane: Some(PaneTarget::Active),
+        ..TargetSelector::default()
+    })
+    .expect_err("pane selector is rejected by tab.rename");
+    assert_eq!(err.code, ErrorCode::InvalidSelector);
+
+    let err = validate_tab_rename_target(&TargetSelector {
+        session: Some(SessionTarget::Active),
+        ..TargetSelector::default()
+    })
+    .expect_err("session selector is rejected by tab.rename");
+    assert_eq!(err.code, ErrorCode::InvalidSelector);
+}
+
+#[test]
+fn tab_mutation_stale_target_rejected_without_windows() {
+    let _flag = FeatureFlag::WarpControlCli.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+        enable_outside_warp_app_state_mutations(&mut app);
+        let bridge = app.add_model(LocalControlBridge::new);
+
+        let response = bridge.update(&mut app, |bridge, ctx| {
+            bridge.handle_request(
+                RequestEnvelope::new(Action::new(ActionKind::TabActivate)),
+                grant_for(ActionKind::TabActivate),
+                ctx,
+            )
+        });
+        assert_eq!(
+            response_error_code(response),
+            ErrorCode::MissingTarget,
+            "tab.activate should fail with MissingTarget without windows"
+        );
+
+        let response = bridge.update(&mut app, |bridge, ctx| {
+            bridge.handle_request(
+                RequestEnvelope::new(Action::new(ActionKind::TabClose)),
+                grant_for(ActionKind::TabClose),
+                ctx,
+            )
+        });
+        assert_eq!(
+            response_error_code(response),
+            ErrorCode::MissingTarget,
+            "tab.close should fail with MissingTarget without windows"
+        );
+    });
+}
+
+#[test]
+fn tab_mutation_stale_tab_id_rejected() {
+    let _flag = FeatureFlag::WarpControlCli.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+        enable_outside_warp_app_state_mutations(&mut app);
+        let bridge = app.add_model(LocalControlBridge::new);
+
+        for action in [ActionKind::TabActivate, ActionKind::TabClose] {
+            let response = bridge.update(&mut app, |bridge, ctx| {
+                bridge.handle_request(
+                    request_with_target(
+                        action,
+                        TargetSelector {
+                            tab: Some(TabTarget::Id {
+                                id: TabSelector("stale-tab-id".to_owned()),
+                            }),
+                            ..TargetSelector::default()
+                        },
+                    ),
+                    grant_for(action),
+                    ctx,
+                )
+            });
+            let code = response_error_code(response);
+            assert_eq!(
+                code,
+                ErrorCode::StaleTarget,
+                "{} with stale tab id should return StaleTarget",
+                action.as_str()
+            );
+        }
+    });
+}
+
+#[test]
+fn tab_mutation_rejects_unsupported_target_family_selectors() {
+    let _flag = FeatureFlag::WarpControlCli.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+        let bridge = app.add_model(LocalControlBridge::new);
+
+        for action in [ActionKind::TabActivate, ActionKind::TabClose] {
+            let err = bridge.update(&mut app, |_, ctx| {
+                select_single_tab_entry_for_mutation(
+                    &TargetSelector {
+                        pane: Some(PaneTarget::Active),
+                        ..TargetSelector::default()
+                    },
+                    action,
+                    ctx,
+                )
+            });
+            assert_eq!(
+                err.expect_err("pane selector should be rejected").code,
+                ErrorCode::InvalidSelector,
+                "{} should reject pane selectors",
+                action.as_str()
+            );
+        }
+    });
+}
+
+#[test]
+fn tab_move_rejects_required_direction_missing() {
+    let err = validate_action_params(&Action {
+        kind: ActionKind::TabMove,
+        params: serde_json::json!({}),
+    })
+    .expect_err("tab.move requires direction param");
+    assert_eq!(err.code, ErrorCode::InvalidParams);
+}
+
+#[test]
+fn pane_split_rejects_required_direction_missing() {
+    let err = validate_action_params(&Action {
+        kind: ActionKind::PaneSplit,
+        params: serde_json::json!({}),
+    })
+    .expect_err("pane.split requires direction param");
+    assert_eq!(err.code, ErrorCode::InvalidParams);
+}
+
+#[test]
+fn pane_navigate_rejects_required_direction_missing() {
+    let err = validate_action_params(&Action {
+        kind: ActionKind::PaneNavigate,
+        params: serde_json::json!({}),
+    })
+    .expect_err("pane.navigate requires direction param");
+    assert_eq!(err.code, ErrorCode::InvalidParams);
+}
+
+#[test]
+fn pane_resize_rejects_required_direction_missing() {
+    let err = validate_action_params(&Action {
+        kind: ActionKind::PaneResize,
+        params: serde_json::json!({}),
+    })
+    .expect_err("pane.resize requires direction param");
+    assert_eq!(err.code, ErrorCode::InvalidParams);
+}
+
+#[test]
+fn pane_mutation_stale_pane_id_rejected() {
+    let _flag = FeatureFlag::WarpControlCli.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+        enable_outside_warp_app_state_mutations(&mut app);
+        let bridge = app.add_model(LocalControlBridge::new);
+
+        for action in [ActionKind::PaneFocus, ActionKind::PaneClose] {
+            let response = bridge.update(&mut app, |bridge, ctx| {
+                bridge.handle_request(
+                    request_with_target(
+                        action,
+                        TargetSelector {
+                            pane: Some(PaneTarget::Id {
+                                id: PaneSelector("stale-pane-id".to_owned()),
+                            }),
+                            ..TargetSelector::default()
+                        },
+                    ),
+                    grant_for(action),
+                    ctx,
+                )
+            });
+            let code = response_error_code(response);
+            assert_eq!(
+                code,
+                ErrorCode::StaleTarget,
+                "{} with stale pane id should return StaleTarget",
+                action.as_str()
+            );
+        }
+    });
+}
+
+#[test]
+fn tab_move_rejects_invalid_direction() {
+    validate_action_params(&Action {
+        kind: ActionKind::TabMove,
+        params: serde_json::json!({ "direction": "not_a_direction" }),
+    })
+    .expect_err("tab.move rejects unknown direction");
+}
+
+#[test]
+fn tab_rename_param_validation_accepts_valid_cases() {
+    validate_action_params(&Action {
+        kind: ActionKind::TabRename,
+        params: serde_json::json!({}),
+    })
+    .expect("tab.rename accepts empty params for reset");
+
+    validate_action_params(&Action {
+        kind: ActionKind::TabRename,
+        params: serde_json::json!({ "title": "New Name" }),
+    })
+    .expect("tab.rename accepts title");
+
+    validate_action_params(&Action {
+        kind: ActionKind::TabRename,
+        params: serde_json::json!({ "title": null }),
+    })
+    .expect("tab.rename accepts null title for reset");
+}
+
+#[test]
+fn select_single_tab_entry_rejects_unsupported_target_families() {
+    let _flag = FeatureFlag::WarpControlCli.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+        let bridge = app.add_model(LocalControlBridge::new);
+
+        bridge.update(&mut app, |_, ctx| {
+            let err = select_single_tab_entry_for_mutation(
+                &TargetSelector {
+                    session: Some(SessionTarget::Active),
+                    ..TargetSelector::default()
+                },
+                ActionKind::TabActivate,
+                ctx,
+            )
+            .expect_err("session selector should be rejected for tab mutation");
+            assert_eq!(err.code, ErrorCode::InvalidSelector);
+
+            let err = select_single_tab_entry_for_mutation(
+                &TargetSelector {
+                    pane: Some(PaneTarget::Active),
+                    ..TargetSelector::default()
+                },
+                ActionKind::TabActivate,
+                ctx,
+            )
+            .expect_err("pane selector should be rejected for tab mutation");
+            assert_eq!(err.code, ErrorCode::InvalidSelector);
+        });
+    });
+}
+
+#[test]
+fn tab_mutation_params_use_correct_protocol_types() {
+    use ::local_control::protocol::TabActivateParams;
+
+    let params = TabActivateParams {
+        relative: Some(::local_control::protocol::TabActivationTarget::Next),
+    };
+    let action = Action::with_params(ActionKind::TabActivate, params)
+        .expect("tab.activate params serialize");
+    assert_eq!(action.params["relative"], "next");
+
+    let params = ::local_control::protocol::TabMoveParams {
+        direction: HorizontalDirection::Left,
+    };
+    let action =
+        Action::with_params(ActionKind::TabMove, params).expect("tab.move params serialize");
+    assert_eq!(action.params["direction"], "left");
+
+    let params = ::local_control::protocol::TabCloseParams {
+        scope: TabCloseScope::Others,
+    };
+    let action =
+        Action::with_params(ActionKind::TabClose, params).expect("tab.close params serialize");
+    assert_eq!(action.params["scope"], "others");
+
+    let params = ::local_control::protocol::PaneSplitParams {
+        direction: PaneDirection::Right,
+        profile: None,
+    };
+    let action =
+        Action::with_params(ActionKind::PaneSplit, params).expect("pane.split params serialize");
+    assert_eq!(action.params["direction"], "right");
 }
 
 #[test]
