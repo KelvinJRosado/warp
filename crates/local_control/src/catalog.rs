@@ -177,6 +177,8 @@ pub enum ActionKind {
     PaneSessionPrevious,
     #[serde(rename = "pane.session.next")]
     PaneSessionNext,
+    #[serde(rename = "pane.session.reopen")]
+    PaneSessionReopen,
     #[serde(rename = "session.list")]
     SessionList,
     #[serde(rename = "block.list")]
@@ -255,6 +257,7 @@ impl ActionKind {
         Self::PaneResize,
         Self::PaneSessionPrevious,
         Self::PaneSessionNext,
+        Self::PaneSessionReopen,
         Self::SessionList,
         Self::BlockList,
         Self::BlockGet,
@@ -313,6 +316,7 @@ impl ActionKind {
             Self::PaneResize => "pane.resize",
             Self::PaneSessionPrevious => "pane.session.previous",
             Self::PaneSessionNext => "pane.session.next",
+            Self::PaneSessionReopen => "pane.session.reopen",
             Self::SessionList => "session.list",
             Self::BlockList => "block.list",
             Self::BlockGet => "block.get",
@@ -356,16 +360,18 @@ impl ActionKind {
             | Self::ThemeList
             | Self::AppearanceGet
             | Self::SettingGet
-            | Self::SettingList => ActionImplementationStatus::Implemented,
+            | Self::SettingList
+            | Self::PaneSessionPrevious
+            | Self::PaneSessionNext
+            | Self::PaneSessionReopen
+            | Self::InputInsert
+            | Self::InputReplace
+            | Self::InputClear
+            | Self::InputModeSet => ActionImplementationStatus::Implemented,
             _ => ActionImplementationStatus::Stub,
         };
         let requires_authenticated_user = self.default_requires_authenticated_user();
-        let allowed_invocation_contexts =
-            if implementation_status == ActionImplementationStatus::Implemented {
-                vec![InvocationContext::OutsideWarp]
-            } else {
-                Vec::new()
-            };
+        let allowed_invocation_contexts = self.default_allowed_invocation_contexts();
         ActionMetadata {
             kind: self,
             name: self.as_str().to_owned(),
@@ -447,6 +453,7 @@ impl ActionKind {
             | Self::PaneResize
             | Self::PaneSessionPrevious
             | Self::PaneSessionNext
+            | Self::PaneSessionReopen
             | Self::ThemeSet
             | Self::AppearanceSet
             | Self::AppearanceFontSize
@@ -510,7 +517,8 @@ impl ActionKind {
             | Self::PaneMaximize
             | Self::PaneResize
             | Self::PaneSessionPrevious
-            | Self::PaneSessionNext => StateDataCategory::AppStateMutation,
+            | Self::PaneSessionNext
+            | Self::PaneSessionReopen => StateDataCategory::AppStateMutation,
         }
     }
 
@@ -525,6 +533,38 @@ impl ActionKind {
             StateDataCategory::UnderlyingDataMutation => PermissionCategory::MutateUnderlyingData,
         }
     }
+    fn default_allowed_invocation_contexts(self) -> Vec<InvocationContext> {
+        match self {
+            Self::BlockList | Self::BlockGet | Self::InputGet | Self::HistoryList => {
+                vec![InvocationContext::InsideWarp, InvocationContext::OutsideWarp]
+            }
+            Self::PaneSessionPrevious
+            | Self::PaneSessionNext
+            | Self::PaneSessionReopen
+            | Self::InputInsert
+            | Self::InputReplace
+            | Self::InputClear
+            | Self::InputModeSet => vec![InvocationContext::InsideWarp],
+            Self::InstanceList
+            | Self::AppPing
+            | Self::AppInspect
+            | Self::AppVersion
+            | Self::AppActive
+            | Self::ActionList
+            | Self::ActionGet
+            | Self::WindowList
+            | Self::TabList
+            | Self::TabCreate
+            | Self::PaneList
+            | Self::SessionList
+            | Self::ThemeList
+            | Self::AppearanceGet
+            | Self::SettingGet
+            | Self::SettingList => vec![InvocationContext::OutsideWarp],
+            _ => Vec::new(),
+        }
+    }
+
     fn default_requires_authenticated_user(self) -> bool {
         match self {
             Self::BlockList | Self::BlockGet | Self::InputGet | Self::HistoryList => true,
@@ -567,7 +607,8 @@ impl ActionKind {
             | Self::PaneMaximize
             | Self::PaneResize
             | Self::PaneSessionPrevious
-            | Self::PaneSessionNext => TargetScope::Pane,
+            | Self::PaneSessionNext
+            | Self::PaneSessionReopen => TargetScope::Pane,
             Self::SessionList
             | Self::InputGet
             | Self::InputInsert

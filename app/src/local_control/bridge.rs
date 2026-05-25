@@ -9,7 +9,7 @@ use ::local_control::{
 };
 use warpui::{Entity, ModelContext, SingletonEntity};
 
-use crate::local_control::handlers::{data, layout, metadata, settings_surfaces};
+use crate::local_control::handlers::{data, layout, metadata, session_input, settings_surfaces};
 use crate::local_control::permissions::{
     ensure_action_allowed, ensure_authenticated_user_matches, ensure_feature_enabled,
 };
@@ -287,6 +287,106 @@ impl LocalControlBridge {
                     .action
                     .params_as()
                     .and_then(|params| data::list_history(&request.target, params, ctx))
+                {
+                    Ok(data) => ResponseEnvelope::ok(request.request_id, data),
+                    Err(error) => ResponseEnvelope::error(request.request_id, error),
+                }
+            }
+            ActionKind::PaneSessionPrevious | ActionKind::PaneSessionNext => {
+                if let Err(error) = ensure_authenticated_user_matches(&grant, ctx) {
+                    return ResponseEnvelope::error(request.request_id, error);
+                }
+                if let Err(error) =
+                    ensure_action_allowed(grant.invocation_context, request.action.kind, ctx)
+                {
+                    return ResponseEnvelope::error(request.request_id, error);
+                }
+                match session_input::cycle_session(request.action.kind, &request.target, ctx) {
+                    Ok(data) => ResponseEnvelope::ok(request.request_id, data),
+                    Err(error) => ResponseEnvelope::error(request.request_id, error),
+                }
+            }
+            ActionKind::PaneSessionReopen => {
+                if let Err(error) = ensure_authenticated_user_matches(&grant, ctx) {
+                    return ResponseEnvelope::error(request.request_id, error);
+                }
+                if let Err(error) =
+                    ensure_action_allowed(grant.invocation_context, request.action.kind, ctx)
+                {
+                    return ResponseEnvelope::error(request.request_id, error);
+                }
+                match session_input::reopen_session(&request.target, ctx) {
+                    Ok(data) => ResponseEnvelope::ok(request.request_id, data),
+                    Err(error) => ResponseEnvelope::error(request.request_id, error),
+                }
+            }
+            ActionKind::InputInsert => {
+                if let Err(error) = ensure_authenticated_user_matches(&grant, ctx) {
+                    return ResponseEnvelope::error(request.request_id, error);
+                }
+                if let Err(error) =
+                    ensure_action_allowed(grant.invocation_context, request.action.kind, ctx)
+                {
+                    return ResponseEnvelope::error(request.request_id, error);
+                }
+                match request
+                    .action
+                    .params_as()
+                    .and_then(|params| session_input::insert_input(&request.target, params, ctx))
+                {
+                    Ok(data) => ResponseEnvelope::ok(request.request_id, data),
+                    Err(error) => ResponseEnvelope::error(request.request_id, error),
+                }
+            }
+            ActionKind::InputReplace => {
+                if let Err(error) = ensure_authenticated_user_matches(&grant, ctx) {
+                    return ResponseEnvelope::error(request.request_id, error);
+                }
+                if let Err(error) =
+                    ensure_action_allowed(grant.invocation_context, request.action.kind, ctx)
+                {
+                    return ResponseEnvelope::error(request.request_id, error);
+                }
+                match request
+                    .action
+                    .params_as()
+                    .and_then(|params| session_input::replace_input(&request.target, params, ctx))
+                {
+                    Ok(data) => ResponseEnvelope::ok(request.request_id, data),
+                    Err(error) => ResponseEnvelope::error(request.request_id, error),
+                }
+            }
+            ActionKind::InputClear => {
+                if let Err(error) = ensure_authenticated_user_matches(&grant, ctx) {
+                    return ResponseEnvelope::error(request.request_id, error);
+                }
+                if let Err(error) =
+                    ensure_action_allowed(grant.invocation_context, request.action.kind, ctx)
+                {
+                    return ResponseEnvelope::error(request.request_id, error);
+                }
+                match request
+                    .action
+                    .params_as::<::local_control::InputClearParams>()
+                    .and_then(|_| session_input::clear_input(&request.target, ctx))
+                {
+                    Ok(data) => ResponseEnvelope::ok(request.request_id, data),
+                    Err(error) => ResponseEnvelope::error(request.request_id, error),
+                }
+            }
+            ActionKind::InputModeSet => {
+                if let Err(error) = ensure_authenticated_user_matches(&grant, ctx) {
+                    return ResponseEnvelope::error(request.request_id, error);
+                }
+                if let Err(error) =
+                    ensure_action_allowed(grant.invocation_context, request.action.kind, ctx)
+                {
+                    return ResponseEnvelope::error(request.request_id, error);
+                }
+                match request
+                    .action
+                    .params_as()
+                    .and_then(|params| session_input::set_input_mode(&request.target, params, ctx))
                 {
                     Ok(data) => ResponseEnvelope::ok(request.request_id, data),
                     Err(error) => ResponseEnvelope::error(request.request_id, error),

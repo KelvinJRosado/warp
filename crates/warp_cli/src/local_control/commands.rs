@@ -12,8 +12,8 @@ use crate::local_control::output::{write_json, write_json_line};
 use crate::local_control::selectors::instance_selector;
 use crate::local_control::{
     ActionCommand, AppCommand, AppearanceCommand, BlockCommand, HistoryCommand, InputCommand,
-    InstanceCommand, PaneCommand, SessionCommand, SettingCommand, TabCommand, TargetArgs,
-    ThemeCommand, WindowCommand,
+    InputModeArgs, InputTextArgs, InstanceCommand, PaneCommand, SessionCommand, SettingCommand,
+    TabCommand, TargetArgs, ThemeCommand, WindowCommand,
 };
 
 /// Display-oriented projection of a discoverable Warp instance.
@@ -161,6 +161,24 @@ pub(super) fn run_pane_command(
         PaneCommand::List(args) => {
             run_action_with_params(args, ActionKind::PaneList, EmptyParams {}, output_format)
         }
+        PaneCommand::PreviousSession(args) => run_action_with_params(
+            args,
+            ActionKind::PaneSessionPrevious,
+            EmptyParams {},
+            output_format,
+        ),
+        PaneCommand::NextSession(args) => run_action_with_params(
+            args,
+            ActionKind::PaneSessionNext,
+            EmptyParams {},
+            output_format,
+        ),
+        PaneCommand::ReopenSession(args) => run_action_with_params(
+            args,
+            ActionKind::PaneSessionReopen,
+            EmptyParams {},
+            output_format,
+        ),
     }
 }
 
@@ -208,6 +226,47 @@ pub(super) fn run_input_command(
             local_control::InputGetParams::default(),
             output_format,
         ),
+        InputCommand::Insert(args) => run_action_with_params(
+            args.target,
+            ActionKind::InputInsert,
+            local_control::InputInsertParams {
+                text: args.text,
+                replace: args.replace,
+            },
+            output_format,
+        ),
+        InputCommand::Replace(InputTextArgs { target, text }) => run_action_with_params(
+            target,
+            ActionKind::InputReplace,
+            local_control::InputReplaceParams { text },
+            output_format,
+        ),
+        InputCommand::Clear(args) => run_action_with_params(
+            args,
+            ActionKind::InputClear,
+            local_control::InputClearParams::default(),
+            output_format,
+        ),
+        InputCommand::Mode(InputModeArgs { target, mode }) => {
+            let input_mode = parse_input_mode(&mode)?;
+            run_action_with_params(
+                target,
+                ActionKind::InputModeSet,
+                local_control::InputModeSetParams { mode: input_mode },
+                output_format,
+            )
+        }
+    }
+}
+
+fn parse_input_mode(mode: &str) -> Result<local_control::InputMode, ControlError> {
+    match mode {
+        "terminal" => Ok(local_control::InputMode::Terminal),
+        "agent" => Ok(local_control::InputMode::Agent),
+        other => Err(ControlError::new(
+            local_control::protocol::ErrorCode::InvalidParams,
+            format!("unrecognized input mode: {other:?}; expected 'terminal' or 'agent'"),
+        )),
     }
 }
 

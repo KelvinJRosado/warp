@@ -2,4 +2,5 @@
 pub(super) mod data;
 pub(super) mod layout;
 pub(super) mod metadata;
+pub(super) mod session_input;
 pub(super) mod settings_surfaces;

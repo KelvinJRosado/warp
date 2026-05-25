@@ -182,6 +182,84 @@ fn parses_completion_generation_command() {
 }
 
 #[test]
+fn parses_session_mutation_commands() {
+    assert!(matches!(
+        ControlArgs::try_parse_from(["warpctrl", "pane", "previous-session"])
+            .expect("pane previous-session parses")
+            .command,
+        ControlCommand::Pane(PaneCommand::PreviousSession(_))
+    ));
+    assert!(matches!(
+        ControlArgs::try_parse_from(["warpctrl", "pane", "next-session"])
+            .expect("pane next-session parses")
+            .command,
+        ControlCommand::Pane(PaneCommand::NextSession(_))
+    ));
+    assert!(matches!(
+        ControlArgs::try_parse_from(["warpctrl", "pane", "reopen-session"])
+            .expect("pane reopen-session parses")
+            .command,
+        ControlCommand::Pane(PaneCommand::ReopenSession(_))
+    ));
+}
+
+#[test]
+fn parses_input_mutation_commands() {
+    let args = ControlArgs::try_parse_from(["warpctrl", "input", "insert", "hello world"])
+        .expect("input insert parses");
+    let ControlCommand::Input(InputCommand::Insert(insert_args)) = args.command else {
+        panic!("expected input insert");
+    };
+    assert_eq!(insert_args.text, "hello world");
+    assert!(!insert_args.replace);
+
+    let args =
+        ControlArgs::try_parse_from(["warpctrl", "input", "insert", "--replace", "new content"])
+            .expect("input insert --replace parses");
+    let ControlCommand::Input(InputCommand::Insert(insert_args)) = args.command else {
+        panic!("expected input insert --replace");
+    };
+    assert_eq!(insert_args.text, "new content");
+    assert!(insert_args.replace);
+
+    let args = ControlArgs::try_parse_from(["warpctrl", "input", "replace", "replaced"])
+        .expect("input replace parses");
+    let ControlCommand::Input(InputCommand::Replace(replace_args)) = args.command else {
+        panic!("expected input replace");
+    };
+    assert_eq!(replace_args.text, "replaced");
+
+    assert!(matches!(
+        ControlArgs::try_parse_from(["warpctrl", "input", "clear"])
+            .expect("input clear parses")
+            .command,
+        ControlCommand::Input(InputCommand::Clear(_))
+    ));
+
+    let args = ControlArgs::try_parse_from(["warpctrl", "input", "mode", "terminal"])
+        .expect("input mode terminal parses");
+    let ControlCommand::Input(InputCommand::Mode(mode_args)) = args.command else {
+        panic!("expected input mode");
+    };
+    assert_eq!(mode_args.mode, "terminal");
+
+    let args = ControlArgs::try_parse_from(["warpctrl", "input", "mode", "agent"])
+        .expect("input mode agent parses");
+    let ControlCommand::Input(InputCommand::Mode(mode_args)) = args.command else {
+        panic!("expected input mode agent");
+    };
+    assert_eq!(mode_args.mode, "agent");
+}
+
+#[test]
+fn input_run_subcommand_is_absent_from_this_shard() {
+    assert!(
+        ControlArgs::try_parse_from(["warpctrl", "input", "run", "echo hello"]).is_err(),
+        "input run must not be present in this shard"
+    );
+}
+
+#[test]
 fn rejects_non_metadata_and_future_catalog_commands_not_in_this_shard() {
     assert!(ControlArgs::try_parse_from(["warpctrl", "drive", "list"]).is_err());
 }

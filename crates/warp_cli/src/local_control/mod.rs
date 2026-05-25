@@ -187,11 +187,17 @@ pub enum TabCommand {
     Create(TargetArgs),
 }
 
-/// Commands that inspect local Warp panes.
+/// Commands that control local Warp panes.
 #[derive(Debug, Clone, Subcommand)]
 pub enum PaneCommand {
     /// List panes in the selected local Warp app.
     List(TargetArgs),
+    /// Switch to the previous session in the active pane.
+    PreviousSession(TargetArgs),
+    /// Switch to the next session in the active pane.
+    NextSession(TargetArgs),
+    /// Reopen the last closed session.
+    ReopenSession(TargetArgs),
 }
 /// Commands that inspect local Warp sessions.
 
@@ -215,6 +221,14 @@ pub enum BlockCommand {
 pub enum InputCommand {
     /// Read the current input buffer.
     Get(TargetArgs),
+    /// Insert text into the active input buffer.
+    Insert(InputInsertArgs),
+    /// Replace the active input buffer with new text.
+    Replace(InputTextArgs),
+    /// Clear the active input buffer.
+    Clear(TargetArgs),
+    /// Set the active input mode.
+    Mode(InputModeArgs),
 }
 
 /// Commands that inspect Warp themes.
@@ -293,6 +307,37 @@ pub struct SettingGetArgs {
 
     /// Allowlisted setting key.
     pub key: String,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct InputInsertArgs {
+    #[command(flatten)]
+    pub target: TargetArgs,
+
+    /// Text to insert into the input buffer.
+    pub text: String,
+
+    /// Replace the existing buffer instead of appending.
+    #[arg(long = "replace", default_value_t = false)]
+    pub replace: bool,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct InputTextArgs {
+    #[command(flatten)]
+    pub target: TargetArgs,
+
+    /// Text to set as the new input buffer contents.
+    pub text: String,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct InputModeArgs {
+    #[command(flatten)]
+    pub target: TargetArgs,
+
+    /// Input mode to activate: `terminal` or `agent`.
+    pub mode: String,
 }
 
 pub fn run(args: ControlArgs) -> ExitCode {

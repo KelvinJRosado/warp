@@ -171,32 +171,40 @@ fn tab_create_rejects_unsupported_selector_forms() {
 }
 
 #[test]
-fn capabilities_advertises_core_and_metadata_slice_actions() {
-    assert_eq!(
-        capabilities(),
-        vec![
-            ActionKind::InstanceList,
-            ActionKind::AppPing,
-            ActionKind::AppInspect,
-            ActionKind::AppVersion,
-            ActionKind::AppActive,
-            ActionKind::ActionList,
-            ActionKind::ActionGet,
-            ActionKind::WindowList,
-            ActionKind::TabList,
-            ActionKind::TabCreate,
-            ActionKind::PaneList,
-            ActionKind::SessionList,
-            ActionKind::BlockList,
-            ActionKind::BlockGet,
-            ActionKind::InputGet,
-            ActionKind::HistoryList,
-            ActionKind::ThemeList,
-            ActionKind::AppearanceGet,
-            ActionKind::SettingGet,
-            ActionKind::SettingList,
-        ]
-    );
+fn capabilities_advertises_session_and_input_mutation_actions() {
+    let caps = capabilities();
+    assert!(caps.contains(&ActionKind::PaneSessionPrevious));
+    assert!(caps.contains(&ActionKind::PaneSessionNext));
+    assert!(caps.contains(&ActionKind::PaneSessionReopen));
+    assert!(caps.contains(&ActionKind::InputInsert));
+    assert!(caps.contains(&ActionKind::InputReplace));
+    assert!(caps.contains(&ActionKind::InputClear));
+    assert!(caps.contains(&ActionKind::InputModeSet));
+}
+
+#[test]
+fn capabilities_advertises_core_and_data_slice_actions() {
+    let caps = capabilities();
+    assert!(caps.contains(&ActionKind::InstanceList));
+    assert!(caps.contains(&ActionKind::AppPing));
+    assert!(caps.contains(&ActionKind::AppInspect));
+    assert!(caps.contains(&ActionKind::AppVersion));
+    assert!(caps.contains(&ActionKind::AppActive));
+    assert!(caps.contains(&ActionKind::ActionList));
+    assert!(caps.contains(&ActionKind::ActionGet));
+    assert!(caps.contains(&ActionKind::WindowList));
+    assert!(caps.contains(&ActionKind::TabList));
+    assert!(caps.contains(&ActionKind::TabCreate));
+    assert!(caps.contains(&ActionKind::PaneList));
+    assert!(caps.contains(&ActionKind::SessionList));
+    assert!(caps.contains(&ActionKind::BlockList));
+    assert!(caps.contains(&ActionKind::BlockGet));
+    assert!(caps.contains(&ActionKind::InputGet));
+    assert!(caps.contains(&ActionKind::HistoryList));
+    assert!(caps.contains(&ActionKind::ThemeList));
+    assert!(caps.contains(&ActionKind::AppearanceGet));
+    assert!(caps.contains(&ActionKind::SettingGet));
+    assert!(caps.contains(&ActionKind::SettingList));
 }
 
 #[test]
@@ -698,4 +706,134 @@ fn data_reads_reject_malformed_params() {
     })
     .expect_err("block.get requires a block id");
     assert_eq!(err.code, ErrorCode::InvalidParams);
+}
+
+#[test]
+fn session_mutation_actions_require_app_state_mutation_permission() {
+    let app_state_without_underlying = settings_with_values(true, false, false, true, false, false);
+    let underlying_without_app_state = settings_with_values(true, false, false, false, false, true);
+
+    for action in [
+        ActionKind::PaneSessionPrevious,
+        ActionKind::PaneSessionNext,
+        ActionKind::PaneSessionReopen,
+        ActionKind::TabCreate,
+    ] {
+        assert_eq!(
+            action.metadata().permission_category,
+            PermissionCategory::MutateAppState
+        );
+        ensure_settings_allow_action(
+            &app_state_without_underlying,
+            InvocationContext::OutsideWarp,
+            action,
+        )
+        .expect("app-state mutation permission allows session cycle action");
+        let err = ensure_settings_allow_action(
+            &underlying_without_app_state,
+            InvocationContext::OutsideWarp,
+            action,
+        )
+        .expect_err("session cycle action is denied without app-state mutation permission");
+        assert_eq!(err.code, ErrorCode::InsufficientPermissions);
+    }
+}
+
+#[test]
+fn input_mutation_actions_require_underlying_data_mutation_permission() {
+    let underlying_data_mutation = settings_with_values(true, false, false, false, false, true);
+    let app_state_without_underlying_mutation =
+        settings_with_values(true, false, false, true, false, false);
+
+    for action in [
+        ActionKind::InputInsert,
+        ActionKind::InputReplace,
+        ActionKind::InputClear,
+        ActionKind::InputModeSet,
+    ] {
+        assert_eq!(
+            action.metadata().permission_category,
+            PermissionCategory::MutateUnderlyingData
+        );
+        ensure_settings_allow_action(
+            &underlying_data_mutation,
+            InvocationContext::OutsideWarp,
+            action,
+        )
+        .expect("underlying data mutation permission allows input mutation action");
+        let err = ensure_settings_allow_action(
+            &app_state_without_underlying_mutation,
+            InvocationContext::OutsideWarp,
+            action,
+        )
+        .expect_err("input mutation is denied without underlying data mutation permission");
+        assert_eq!(err.code, ErrorCode::InsufficientPermissions);
+    }
+}
+
+#[test]
+fn input_mutation_params_are_validated() {
+    for action in [
+        ActionKind::PaneSessionPrevious,
+        ActionKind::PaneSessionNext,
+        ActionKind::PaneSessionReopen,
+        ActionKind::InputClear,
+    ] {
+        validate_action_params(&Action {
+            kind: action,
+            params: serde_json::json!({}),
+        })
+        .expect("empty params are accepted");
+
+        let err = validate_action_params(&Action {
+            kind: action,
+            params: serde_json::json!({ "unexpected": true }),
+        })
+        .expect_err("unexpected params are rejected");
+        assert_eq!(err.code, ErrorCode::InvalidParams);
+    }
+
+    validate_action_params(&Action {
+        kind: ActionKind::InputInsert,
+        params: serde_json::json!({ "text": "hello" }),
+    })
+    .expect("input.insert with text is accepted");
+
+    let err = validate_action_params(&Action {
+        kind: ActionKind::InputInsert,
+        params: serde_json::json!({ "text": "" }),
+    })
+    .expect_err("input.insert requires a non-empty text value");
+    assert_eq!(err.code, ErrorCode::InvalidParams);
+
+    validate_action_params(&Action {
+        kind: ActionKind::InputReplace,
+        params: serde_json::json!({ "text": "new content" }),
+    })
+    .expect("input.replace with text is accepted");
+
+    validate_action_params(&Action {
+        kind: ActionKind::InputModeSet,
+        params: serde_json::json!({ "mode": "terminal" }),
+    })
+    .expect("input.mode.set with terminal mode is accepted");
+
+    validate_action_params(&Action {
+        kind: ActionKind::InputModeSet,
+        params: serde_json::json!({ "mode": "agent" }),
+    })
+    .expect("input.mode.set with agent mode is accepted");
+
+    let err = validate_action_params(&Action {
+        kind: ActionKind::InputModeSet,
+        params: serde_json::json!({}),
+    })
+    .expect_err("input.mode.set requires a mode parameter");
+    assert_eq!(err.code, ErrorCode::InvalidParams);
+}
+
+#[test]
+fn input_run_is_not_in_catalog() {
+    let err = action_metadata_for_name("input.run").expect_err("input.run is not allowlisted");
+    assert_eq!(err.code, ErrorCode::NotAllowlisted);
 }
